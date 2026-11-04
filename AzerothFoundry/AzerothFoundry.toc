@@ -1,0 +1,68 @@
+## Interface: 16001
+## Title: Azeroth Foundry
+## Notes: Your Adventurer's Journal for World of Warcraft: Forever.
+## Author: Azeroth Foundry
+## Version: 1.0.0
+## SavedVariables: AzerothFoundryDB
+## OptionalDeps: ProfessionDB, ItemDB, QuestDB
+
+Core.lua
+Compatibility.lua
+Data.lua
+CharacterStats.lua
+Atlas.lua
+QuestRecords.lua
+QuestItemResolver.lua
+QuestDetailData.lua
+QuestChains.lua
+QuestBrowser.lua
+QuestRecap.lua
+MinimapTileIndex.lua
+AtlasTerrain.lua
+Expeditions.lua
+ExpeditionCharter.lua
+CharterChronicle.lua
+ExpeditionMilestones.lua
+ExpeditionIntegration.lua
+ExpeditionInitiation.lua
+RuleObserver.lua
+CharterAlerts.lua
+Workshop.lua
+Recipes.lua
+Items.lua
+Inventory.lua
+Crafting.lua
+CraftingQueue.lua
+GuidedGoals.lua
+ExplorationGoals.lua
+Collections.lua
+CollectionsSources.lua
+AtlasExploration.lua
+Minimap.lua
+UI/Widgets.lua
+UI/FoundrySkin.lua
+UI/ThemeEngine.lua
+UI/ThemePreviews.lua
+UI/Journal.lua
+UI/Atlas.lua
+UI/Collections.lua
+UI/AtlasDebug.lua
+UI/QuestJournal.lua
+UI/QuestRecap.lua
+UI/ModularOverview.lua
+UI/Pages.lua
+UI/AccountTrackers.lua
+UI/CharacterRoster.lua
+UI/Settings.lua
+UI/LivingWorkshop.lua
+UI/ProfessionDepth.lua
+UI/MaterialsWorkbench.lua
+UI/CraftingPlanner.lua
+
+UI/GoalJournal.lua
+UI/GoalNotifications.lua
+
+UI/NotesJournal.lua
+UI/SelfFoundCharter.lua
+UI/ExpeditionInitiation.lua
+UI/AdventurersGuide.lua
