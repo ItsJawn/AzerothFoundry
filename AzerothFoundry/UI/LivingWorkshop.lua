@@ -5,6 +5,42 @@ local UI = AF.UI
 local P = UI.palette
 
 local TABS = {"Professions", "Recipes", "Crafting Queue", "Materials"}
+
+-- WoW protects CancelShapeshiftForm: it cannot be called from addon Lua.
+-- We instead present a secure cancelaura action directly over each Craft
+-- button only while a craft-blocking form is active. The player's click
+-- leaves the form; the next normal Craft click executes CraftRecipe.
+-- No macro slots, insecure /cancelform, timer casts, or automatic retry.
+local function BlockingCraftFormSpell()
+    if type(UnitClass)~='function' or type(GetShapeshiftForm)~='function' or
+        type(GetShapeshiftFormInfo)~='function' then return nil end
+    local _,class=UnitClass('player')
+    -- Warrior stances and unrelated auras do not need cancelling. The
+    -- families below include every druid form, Ghost Wolf, Shadowform,
+    -- Stealth and Metamorphosis if exposed by the current client.
+    if class~='DRUID' and class~='SHAMAN' and class~='PRIEST'
+        and class~='ROGUE' and class~='WARLOCK' then return nil end
+    local okIndex,index=pcall(GetShapeshiftForm)
+    if not okIndex or type(index)~='number' or index<1 then return nil end
+    local ok,icon,active,castable,spellID=pcall(GetShapeshiftFormInfo,index)
+    if not ok or not active or not tonumber(spellID) then return nil end
+    if class=='SHAMAN' and type(GetShapeshiftFormID)=='function' then
+        local okID,formID=pcall(GetShapeshiftFormID)
+        if okID and tonumber(formID)~=16 then return nil end
+    end
+    local name=nil
+    if type(C_Spell)=='table' and type(C_Spell.GetSpellInfo)=='function' then
+        local okSpell,info=pcall(C_Spell.GetSpellInfo,spellID)
+        if okSpell and type(info)=='table' then name=info.name end
+    end
+    if not name and type(GetSpellInfo)=='function' then
+        local okSpell,got=pcall(GetSpellInfo,spellID)
+        if okSpell then name=got end
+    end
+    if type(name)~='string' or name=='' then return nil end
+    return name
+end
+
 local function Caption(parent, name)
     local f=UI:SectionTitle(parent,name)
     f:SetPoint('TOPLEFT',14,-12);f:SetPoint('TOPRIGHT',-12,-12)
@@ -349,6 +385,68 @@ function UI:BuildWorkshopQueue(page)
     craftAll:SetHeight(28)
     craftAll:SetPoint('BOTTOMLEFT',statusPanel,'BOTTOM',4,89)
     craftAll:SetPoint('BOTTOMRIGHT',statusPanel,'BOTTOMRIGHT',-12,89)
+    -- The secure action is intentionally a sibling overlay, not a mutation of
+    -- the existing tested Craft buttons. It is shown only out of combat when
+    -- an actual form spell can be resolved, and consumes the first Craft click
+    -- to leave form. It never sends a craft request on the same click.
+    local formOverlays={}
+    -- The insecure action template is secure for player-clicked actions only
+    -- outside combat; unlike SecureActionButtonTemplate it does not protect
+    -- the entire Foundry frame hierarchy. Use a guarded fallback on clients
+    -- where that template is unavailable.
+    local function MakeLeaveFormOverlay(target)
+        local ok,b=pcall(CreateFrame,'Button',nil,statusPanel,'InsecureActionButtonTemplate')
+        if not ok or not b then
+            b=CreateFrame('Button',nil,statusPanel,'SecureActionButtonTemplate')
+        end
+        b:SetAllPoints(target)
+        b:SetFrameLevel(target:GetFrameLevel()+5)
+        b:RegisterForClicks('LeftButtonUp')
+        b:SetAttribute('type','cancelaura')
+        b:EnableMouse(true)
+        local bg=b:CreateTexture(nil,'BACKGROUND')
+        bg:SetAllPoints(b)
+        bg:SetColorTexture(.69,.10,.11,.98)
+        local title=b:CreateFontString(nil,'OVERLAY','GameFontNormalSmall')
+        title:SetAllPoints(b)
+        title:SetText('Leave Form')
+        title:SetTextColor(1,.96,.92)
+        -- This is an actionable safety cue, not a themed Craft button:
+        -- keep it visibly red in Classic, Forever, Light, Matrix and custom themes.
+        if UI.RegisterThemeTarget then
+            UI:RegisterThemeTarget(b,function()
+                bg:SetColorTexture(.69,.10,.11,.98)
+                title:SetTextColor(1,.96,.92)
+            end)
+        end
+        b:Hide()
+        formOverlays[#formOverlays+1]=b
+        return b
+    end
+    MakeLeaveFormOverlay(craftOne)
+    MakeLeaveFormOverlay(craftAll)
+    local formEvent=CreateFrame('Frame',nil,statusPanel)
+    formEvent:RegisterEvent('UPDATE_SHAPESHIFT_FORM')
+    formEvent:RegisterEvent('UPDATE_SHAPESHIFT_FORMS')
+    formEvent:RegisterEvent('PLAYER_REGEN_ENABLED')
+    local function RefreshLeaveForm()
+        -- Protected button attributes and visibility cannot be changed in
+        -- combat. Crafting itself already refuses to start in combat.
+        if InCombatLockdown and InCombatLockdown() then return end
+        local spell=BlockingCraftFormSpell()
+        for _,b in ipairs(formOverlays) do
+            if spell then
+                b:SetAttribute('spell',spell)
+                b:Show()
+            else
+                b:Hide()
+                b:SetAttribute('spell',nil)
+            end
+        end
+    end
+    formEvent:SetScript('OnEvent',function()RefreshLeaveForm()end)
+    statusPanel:HookScript('OnShow',RefreshLeaveForm)
+    RefreshLeaveForm()
     local nextCraft=WorkshopButton(statusPanel,'Next Queued Craft',function()
         local projects=AF:GetCraftingQueueProjects()
         local old=UI.workshopQueueSelected
@@ -363,7 +461,11 @@ function UI:BuildWorkshopQueue(page)
         end
         if picked then
             UI.workshopQueueSelected=picked.id
-            UI.workshopQueueNotice='Next queued recipe selected. Click Craft 1 or Craft All; Foundry will prepare it.'
+            -- This button click can pre-open the selected profession, without
+            -- crafting or changing persistent queue progress.
+            local ok,msg=AF:PrepareQueuedCraftOnSelection(picked)
+            UI.workshopQueueNotice=ok and ('Next queued recipe selected. '..tostring(msg))
+                or ('Next queued recipe selected. '..tostring(msg or 'Open its profession to craft.'))
         else
             UI.workshopQueueNotice='No other queued recipe assigned to the current character.'
         end
@@ -397,7 +499,10 @@ function UI:BuildWorkshopQueue(page)
         end
         UI:FillList(list,rows,function(row)
             UI.workshopQueueSelected=row.key
-            UI.workshopQueueNotice=nil
+            local selected=AF:FindRecord(projects,row.key)
+            local ok,msg=AF:PrepareQueuedCraftOnSelection(selected)
+            UI.workshopQueueNotice=ok and msg or
+                (msg and 'Profession not prepared: '..tostring(msg) or nil)
             page:Refresh()
         end,UI.workshopQueueSelected)
         for i,row in ipairs(rows) do
@@ -462,7 +567,7 @@ function UI:BuildWorkshopQueue(page)
         end
         local quick=AF:GetQueuedCraftQuickAction(chosen)
         lines[#lines+1]=(quick.canQuickCraft and not action.ready and quick.reason) or action.reason or 'Cannot check current crafting state.'
-        lines[#lines+1]='Craft 1 / Craft All prepares the recipe and keeps Blizzard professions concealed. First use may need a second click while the profession loads.'
+        lines[#lines+1]='Selecting a queued craft prepares its profession. Craft 1 / Craft All sends the craft only after the native session is ready.'
         if UI.workshopQueueNotice then lines[#lines+1]=UI.workshopQueueNotice end
         local liveMessage=AF.GetQueueCraftRequestMessage and AF:GetQueueCraftRequestMessage(chosen)
         if liveMessage then lines[#lines+1]='Execution: '..liveMessage end

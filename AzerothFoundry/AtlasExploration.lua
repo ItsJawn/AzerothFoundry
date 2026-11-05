@@ -119,7 +119,9 @@ local function CriteriaFromClient(self,mapID)
         return nil,'Progress unavailable'
     end
     local achievementID=FindAchievement(mapID,info.name)
-    if not achievementID then return nil,'Progress unavailable' end
+    -- Some Forever-only regions (e.g., Zephras Isle) have discovery overlays
+    -- but are not part of any Explorer achievement. Do not invent a percent.
+    if not achievementID then return nil,'No Explorer achievement for this zone' end
     local ok,total=pcall(GetAchievementNumCriteria,achievementID)
     if not ok or type(total)~='number' or total<1 or total>500 then
         return nil,'Progress unavailable'

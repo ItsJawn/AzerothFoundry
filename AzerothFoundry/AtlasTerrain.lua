@@ -13,6 +13,70 @@ AF.AtlasTerrain=T
 local min,max,abs,floor=math.min,math.max,math.abs,math.floor
 local TILE=533.3333333333
 
+-- Forever-only experimental tile resolution for Zephras Isle. The island is a
+-- separate instance (world 2991), outside OpenMap's older continent index.
+-- Look up its *client-owned* terrain files by path instead of shipping BLP art,
+-- guessing FileDataIDs, or touching the working continent indexes.
+-- C_UIFileAsset.GetFileID is the modern FileAsset path resolver. If the Forever
+-- client does not publish these paths, fail closed to the native illustrated map.
+local ZEPHRAS_WORLD=2991
+local zephrasLookupStatus=nil
+local zephrasLookupAttempted=false
+local function zephrasTiles(x0,y0,x1,y1,x2,y2)
+    if zephrasLookupAttempted then return nil end
+    zephrasLookupAttempted=true
+    if not (C_UIFileAsset and type(C_UIFileAsset.GetFileID)=='function') then
+        zephrasLookupStatus='C_UIFileAsset.GetFileID unavailable'
+        return nil
+    end
+    local x3,y3=x1+x2-x0,y1+y2-y0
+    local minX,maxX=min(x0,x1,x2,x3),max(x0,x1,x2,x3)
+    local minY,maxY=min(y0,y1,y2,y3),max(y0,y1,y2,y3)
+    -- Map grid key is x*64+y. Like the existing tile index, the first
+    -- minimap filename coordinate follows world Y; the second follows world X.
+    local colLo=max(0,floor(32-maxY/TILE)-1)
+    local colHi=min(63,floor(32-minY/TILE)+1)
+    local rowLo=max(0,floor(32-maxX/TILE)-1)
+    local rowHi=min(63,floor(32-minX/TILE)+1)
+    if colHi<colLo or rowHi<rowLo then
+        zephrasLookupStatus='Zephras world projection has no valid tile range'
+        return nil
+    end
+    local result,count,lookups={},0,0
+    local getID=C_UIFileAsset.GetFileID
+    for col=colLo,colHi do
+        for row=rowLo,rowHi do
+            local basename=string.format('map%02d_%02d.blp',col,row)
+            -- The modern asset lookup accepts forward- or backslash paths;
+            -- query a second spelling only when the first cannot be resolved.
+            local names={
+                'world/minimaps/2991/'..basename,
+                'World\\Minimaps\\2991\\'..basename,
+            }
+            local fileID
+            for _,name in ipairs(names) do
+                lookups=lookups+1
+                local ok,id=pcall(getID,name)
+                if ok and type(id)=='number' and id>0 then
+                    fileID=id
+                    break
+                end
+            end
+            if fileID then
+                result[col*64+row]=fileID
+                count=count+1
+            end
+        end
+    end
+    zephrasLookupStatus=string.format('Zephras tile filenames resolved: %d from %d coordinate candidates (%d queries)',
+        count,(colHi-colLo+1)*(rowHi-rowLo+1),lookups)
+    if count==0 then
+        zephrasLookupStatus=zephrasLookupStatus..' (lookup unsupported; no terrain index yet)'
+        return nil
+    end
+    return result
+end
+
 local function vec(p)
     if not p then return end
     if type(p.GetXY)=='function' then
@@ -39,8 +103,13 @@ local function mapProjection(mapID)
     local c,x0,y0=get(0,0)
     local c1,x1,y1=get(1,0)
     local c2,x2,y2=get(0,1)
-    if not c or c~=c1 or c~=c2 or not AF.MapMinimap or not AF.MapMinimap[c] then
-        return nil,'No indexed terrain on this continent' end
+    if not c or c~=c1 or c~=c2 then
+        return nil,'World projection unavailable or inconsistent' end
+    if c==ZEPHRAS_WORLD and AF.MapMinimap and not AF.MapMinimap[c] then
+        AF.MapMinimap[c]=zephrasTiles(x0,y0,x1,y1,x2,y2)
+    end
+    if not AF.MapMinimap or not AF.MapMinimap[c] then
+        return nil,(c==ZEPHRAS_WORLD and zephrasLookupStatus) or 'No indexed terrain on this continent' end
     local ax,ay,bx,by=x1-x0,y1-y0,x2-x0,y2-y0
     local determinant=ax*by-ay*bx
     if abs(determinant)<1e-3 then return nil,'Map world projection degenerate' end
@@ -109,7 +178,7 @@ function T:BuildManifest(mapID,layer)
         end
     end
     local masks,maskStatus=currentReveal(mapID,layer)
-    return {mapID=mapID,tiles=entries,masks=masks,source='OpenMap v0.4.0-beta + live client reveal',maskStatus=maskStatus},nil
+    return {mapID=mapID,tiles=entries,masks=masks,source=(projection.continent==ZEPHRAS_WORLD and 'Zephras client file lookup' or 'OpenMap v0.4.0-beta')..' + live client reveal',maskStatus=maskStatus},nil
 end
 
 -- Only consider the tile/mask *intersection*: a huge exploration piece may
@@ -218,9 +287,19 @@ function T:Attach(page,viewport,canvas,right,UI,palette)
     local laidOutZoom,laidOutWidth,laidOutHeight=nil,nil,nil
     local settleNextFrame=false
     local inSettlePass=false
+    local function SyncNativeDetail()
+        local showing=stats.visible>0
+        if page.afLastTerrainVisible~=showing then
+            page.afLastTerrainVisible=showing
+            if type(page.RefreshDetailOpacity)=='function' then
+                page:RefreshDetailOpacity()
+            end
+        end
+    end
     local function HideAll()
         for _,slot in ipairs(pool) do slot.texture:Hide();slot.key=nil end
         stats.visible=0
+        SyncNativeDetail()
     end
     local function Fail(why)
         settings.terrainEnabled=false
@@ -341,7 +420,9 @@ function T:Attach(page,viewport,canvas,right,UI,palette)
         end
         local data,why=getManifest(self.mapID)
         if not data then
-            HideAll();stats.reason=why or 'World projection unavailable';return
+            HideAll()
+            stats.reason=(why or 'World projection unavailable')..'; native map art used'
+            return
         end
         self.debugTerrainManifest=data
         local raw=page.afMapDebug and page.afMapDebug.unmasked==true
@@ -432,6 +513,7 @@ function T:Attach(page,viewport,canvas,right,UI,palette)
             end
         end
         stats.visible=displayed
+        SyncNativeDetail()
         laidOutZoom=self.zoom or 1
         laidOutWidth,laidOutHeight=cw,ch
         stats.reused=retained
@@ -481,7 +563,7 @@ function T:Attach(page,viewport,canvas,right,UI,palette)
             if ok and type(value)=='number' then addonKB=value end
         end
         local fmt=function(n) return type(n)=='number' and string.format('%.1f',n) or tostring(n) end
-        local msg='Terrain: '..stats.reason..' | tiles '..stats.visible..'/'..T.maxTiles..
+        local msg='Terrain: '..stats.reason..(zephrasLookupStatus and (' | '..zephrasLookupStatus) or '')..' | tiles '..stats.visible..'/'..T.maxTiles..
           ' (created '..stats.created..', in view '..stats.candidates..', required pieces '..stats.required..
           ', eligible '..stats.eligible..', deferred '..stats.clipped..', no mask '..stats.masked..
           ', retained '..stats.reused..', lifetime swaps '..stats.swaps..') | redraws '..stats.updates..

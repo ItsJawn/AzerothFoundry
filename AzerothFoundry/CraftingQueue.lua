@@ -513,6 +513,22 @@ end
 -- information is useful for selecting the right character and displaying the
 -- plan, but cannot veto a native craft merely because reagent slots were not
 -- captured (common on Retail-quality recipes and some Forever schematics).
+-- Forever uses a single tradeskill line per profession. Retail's child
+-- expansion/era selection must never run on a Forever client, even if the
+-- shared Mainline API happens to expose that function.
+local function IsForeverCraftingClient()
+    if AF.Compatibility and type(AF.Compatibility.GetClient)=='function' then
+        local family=AF.Compatibility.GetClient()
+        if family=='Forever' then return true end
+        if family=='Retail' then return false end
+    end
+    if type(GetBuildInfo)=='function' then
+        local ok,info=pcall(function() return select(4,GetBuildInfo()) end)
+        if ok then return tonumber(info)==16001 end
+    end
+    return false
+end
+
 local function CurrentProfessionMatches(opened,snapshot,craft)
     if type(opened)~='table' then return false end
     local id=tonumber(snapshot and snapshot.professionID) or tonumber(craft and craft.professionID)
@@ -574,7 +590,9 @@ function AF:GetQueueCraftAction(project)
         return result
     end
     if not recipeID or not listMatch then
-        result.reason='The queued recipe is not in the open profession list. Select its expansion or rescan.'
+        result.reason=IsForeverCraftingClient()
+            and 'The queued recipe is not in the active profession list yet. Wait for the list to load or rescan.'
+            or 'The queued recipe is not in the open profession list. Select its expansion or rescan.'
         return result
     end
     local live=LiveCall(api.GetRecipeInfo,recipeID)
@@ -1238,6 +1256,7 @@ end
 -- never by the last/default era selected in Blizzard's profession window.
 -- Forever may report no child skill line; in that case no era switching occurs.
 function AF:GetQueuedCraftEra(project)
+    if IsForeverCraftingClient() then return nil,nil,nil end
     local api=C_TradeSkillUI
     local recipeID=tonumber(project and project.crafting and project.crafting.recipeID)
     if not recipeID or type(api)~='table' or
@@ -1251,6 +1270,7 @@ function AF:GetQueuedCraftEra(project)
     return child,name,parent
 end
 function AF:EnsureQueuedCraftEra(project)
+    if IsForeverCraftingClient() then return true,nil end
     local api=C_TradeSkillUI
     local child,name,parent=self:GetQueuedCraftEra(project)
     if not child then return true,nil end
@@ -1393,6 +1413,10 @@ function AF:ObserveQueueCraftSignal(event,...)
         end
     elseif event=='TRADE_SKILL_CRAFT_BEGIN' then
         if age>15 then return end
+        -- The event supplies a recipe spell ID on modern clients. Ignore
+        -- unrelated native crafting while a queue request is still pending.
+        local startedRecipeID=tonumber((...))
+        if startedRecipeID and startedRecipeID~=tonumber(r.recipeID) then return end
         r.status='craft_started';r.lastEvent=event
     elseif event=='UPDATE_TRADESKILL_CAST_COMPLETE' then
         if age>60 then return end
@@ -1487,6 +1511,33 @@ function AF:OpenQueuedCraftProfession(project,conceal)
     return true,'Opened '..(a.professionName or 'profession')..' in Blizzard UI.'
 end
 
+-- v1.0.6: A click on a queued recipe is already a real user interaction.
+-- Use it to start the native profession's asynchronous load ahead of Craft 1
+-- / Craft All. This never calls CraftRecipe or credits an item. If the player
+-- does not explicitly select a row first, Craft still prepares the session
+-- safely and may require a second click on the first cold load.
+function AF:PrepareQueuedCraftOnSelection(project)
+    local action=self:GetQueueCraftAction(project)
+    if not action.canOpen then return false,action.reason end
+    if InCombatLockdown and InCombatLockdown() then
+        return false,'Cannot prepare a profession in combat.'
+    end
+    local api=C_TradeSkillUI
+    local snapshot=self:FindQueueRecipe(project)
+    local opened=type(api)=='table' and LiveCall(api.GetBaseProfessionInfo) or nil
+    local same=CurrentProfessionMatches(opened,snapshot,project and project.crafting)
+    local frame=ProfessionsFrame
+    local shown=frame and type(frame.IsShown)=='function' and frame:IsShown()
+    if same and shown then
+        -- A shown alpha-zero window is an active session. Do not repeatedly
+        -- reset its profession list, particularly while recipes are streaming.
+        local ready=self:IsQueueCraftSessionActive()
+        return true,ready and 'Profession ready. Click Craft 1 or Craft All.'
+            or 'Profession opened; waiting for its recipe data to finish loading.'
+    end
+    return self:OpenQueuedCraftProfession(project,true)
+end
+
 -- User-requested escape hatch: the Open Profession button always reveals
 -- Blizzard's interface. It never starts a craft or changes the queue.
 function AF:ShowQueuedCraftProfession(project)
@@ -1572,7 +1623,7 @@ function AF:GetQueuedCraftQuickAction(project)
     if type(api.OpenRecipe)~='function' then return result end
     result.canQuickCraft=true
     result.reason=present and 'Craft will select the recipe and start crafting.'
-        or 'Craft will open the profession; a second click may be needed after recipes load.'
+        or 'Craft will prepare the profession; recipe data may need to load first.'
     result.remaining=qty-done
     return result
 end
@@ -1593,7 +1644,13 @@ function AF:TryQueuedCraftQuick(project,all)
     -- v0.7.3.17 regression: a valid fixed-basic-schematic call silently did
     -- nothing because we skipped opening the actual profession session.
     local sessionReady,sessionReason=self:IsQueueCraftSessionActive()
-    if not sessionReady then
+    local snapshot=self:FindQueueRecipe(project)
+    local nativeProfession=LiveCall(api.GetBaseProfessionInfo)
+    -- An active session for a DIFFERENT profession is not usable simply
+    -- because the Blizzard frame remains open. Switch on this player click.
+    local wrongProfession=sessionReady and type(nativeProfession)=='table' and
+        not CurrentProfessionMatches(nativeProfession,snapshot,project.crafting)
+    if not sessionReady or wrongProfession then
         local opened,message=self:OpenQueuedCraftProfession(project,true)
         if not opened then return false,message end
         sessionReady,sessionReason=self:IsQueueCraftSessionActive()
@@ -1692,7 +1749,25 @@ function AF:ObserveQueuedCraftResult(data)
             end
         end
     end
-    local matched=candidates[1]
+    -- When two queue entries produce the same item, the most recent
+    -- user-clicked craft request identifies which entry should advance.
+    -- Preserve the old queue-order fallback for ordinary native crafts that
+    -- have no associated Foundry request; never infer a recipe from an item.
+    local matched
+    local request=self.lastQueueCraftRequest
+    local age=request and (Now()-(tonumber(request.at) or 0))
+    if request and type(age)=='number' and age>=0 and age<=90
+        and request.status~='rejected' and request.status~='blocked'
+        and request.status~='cast_failed' and request.status~='client_error' then
+        for _,candidate in ipairs(candidates) do
+            if candidate.p.id==request.projectID
+                and tonumber(candidate.recipe.id)==tonumber(request.recipeID) then
+                matched=candidate
+                break
+            end
+        end
+    end
+    matched=matched or candidates[1]
     if not matched then return false end
     local project,recipe=matched.p,matched.recipe
     local yield=tonumber(recipe.quantityMin) or 1

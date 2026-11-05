@@ -1668,6 +1668,70 @@ function UI:BuildRecipes(page)
     libState:SetHeight(28)
 
     Section(center, "Recorded Recipes")
+    -- Captured from the owner's open profession. Difficulty is intentionally
+    -- saved per character, not inferred from another character's skill rank.
+    local skillColors = {
+        [0]={1,.39,.16, 'Orange — best chance of a skill-up'},
+        [1]={1,.80,.19, 'Yellow — likely to grant a skill-up'},
+        [2]={.32,.83,.42, 'Green — lower chance of a skill-up'},
+        [3]={.62,.62,.62, 'Gray — no skill-up'},
+    }
+    local function SkillIndicator(recipe)
+        if not recipe or not recipe.learned then return end
+        local difficulty=tonumber(recipe.relativeDifficulty)
+        local c=skillColors[difficulty]
+        if not c then return end
+        if difficulty==3 or recipe.canSkillUp==false then return nil,c end
+        local gained=tonumber(recipe.numSkillUps) or 1
+        return math.max(1,math.floor(gained)), c
+    end
+    local function RecipeHover(button, match)
+        if not match or not match.recipe or not GameTooltip then return end
+        local recipe=AF:GetRecipeDetails(match.snapshot,match.recipe)
+        GameTooltip:SetOwner(button,'ANCHOR_RIGHT')
+        local displayed=false
+        -- Prefer the actual crafted item, including its variant link if saved;
+        -- item tooltips trigger Blizzard's built-in gear comparison support.
+        local itemID=tonumber(recipe.outputItemID)
+        local itemLink=recipe.outputItemLink
+        if (type(itemLink)=='string' and itemLink:find('|Hitem:',1,true)) or itemID then
+            local value=itemLink or ('item:'..itemID)
+            if type(GameTooltip.SetHyperlink)=='function' then
+                displayed=pcall(GameTooltip.SetHyperlink,GameTooltip,value)
+            elseif itemID and type(GameTooltip.SetItemByID)=='function' then
+                displayed=pcall(GameTooltip.SetItemByID,GameTooltip,itemID)
+            end
+        end
+        if not displayed and type(recipe.recipeLink)=='string' and type(GameTooltip.SetHyperlink)=='function' then
+            displayed=pcall(GameTooltip.SetHyperlink,GameTooltip,recipe.recipeLink)
+        end
+        if not displayed then
+            GameTooltip:SetText(recipe.name or ('Recipe '..tostring(recipe.id)),1,.83,.48)
+            GameTooltip:AddLine('Crafted item tooltip is not yet available from the client.',.77,.7,.62,true)
+        end
+        local _,c=SkillIndicator(recipe)
+        if c then
+            GameTooltip:AddLine(' ',1,1,1)
+            GameTooltip:AddLine(c[4]..' (at last profession scan)',c[1],c[2],c[3],true)
+        end
+        GameTooltip:Show()
+        -- Respect the player's normal WoW comparison preference:
+        -- automatic when enabled, otherwise hold Shift to compare.
+        local modified=type(IsModifiedClick)=='function' and IsModifiedClick('COMPAREITEMS')
+        local always=(C_CVar and type(C_CVar.GetCVarBool)=='function' and
+            C_CVar.GetCVarBool('alwaysCompareItems')) or
+            (type(GetCVarBool)=='function' and GetCVarBool('alwaysCompareItems'))
+        if itemID and displayed and (modified or always)
+            and type(GameTooltip_ShowCompareItem)=='function' then
+            pcall(GameTooltip_ShowCompareItem,GameTooltip)
+        end
+    end
+    local function RecipeHoverLeave()
+        if type(GameTooltip_HideShoppingTooltips)=='function' then
+            pcall(GameTooltip_HideShoppingTooltips,GameTooltip)
+        end
+        if GameTooltip then GameTooltip:Hide() end
+    end
     local searchLabel = Line(center, 49, "small", 23)
     searchLabel:SetText("Search by name or spell ID")
     local search = self:Input(center, 280)
@@ -1782,7 +1846,7 @@ function UI:BuildRecipes(page)
     -- the Queue's explicit player-clicked Craft controls.
     local queueDialog=self:NewFrame('Frame',self.frame or UIParent,'AzerothFoundryRecipeQueueDialog')
     queueDialog:SetFrameStrata('FULLSCREEN_DIALOG')
-    queueDialog:SetSize(425,238)
+    queueDialog:SetSize(475,238)
     queueDialog:SetPoint('CENTER',self.frame or UIParent,'CENTER')
     self:Background(queueDialog,P.parchmentLight,true)
     queueDialog:EnableMouse(true)
@@ -1811,13 +1875,7 @@ function UI:BuildRecipes(page)
     queueLess:SetPoint('LEFT',queueAmount,'RIGHT',8,0);queueLess:SetSize(47,28)
     local queueMore=UI.WorkshopButton(queueDialog,'+',function()adjustQueueAmount(1)end)
     queueMore:SetPoint('LEFT',queueLess,'RIGHT',7,0);queueMore:SetSize(47,28)
-    local queueNotice=self:Text(queueDialog,'small',P.ink)
-    queueNotice:SetPoint('TOPLEFT',18,-148);queueNotice:SetPoint('TOPRIGHT',-18,-148)
-    queueNotice:SetHeight(20)
-    queueNotice:SetText('Quantity 1–99. Queue only — no Goal is created.')
-    local queueCancel=UI.WorkshopButton(queueDialog,'Cancel',function()queueDialog:Hide()end)
-    queueCancel:SetPoint('BOTTOMLEFT',18,15);queueCancel:SetSize(145,29)
-    local queueConfirm=UI.WorkshopButton(queueDialog,'Add to Queue',function()
+    local function AddSelectedCraftToQueue()
         local snapshot,recipe,owner=UI.craftSelectedSnapshot,UI.craftSelectedRecipe,UI.recipeSelectedCharacter
         local opts=AF.db and AF.db.settings and AF.db.settings.recipes
         if not snapshot or not recipe or not owner or not opts then
@@ -1836,7 +1894,29 @@ function UI:BuildRecipes(page)
         queueDialog:Hide()
         AF.Print('Added '..qty..'x '..(recipe.name or 'recipe')..' to the Crafting Queue.')
         UI:Switch('Crafting Queue')
+    end
+    local queueNotice
+    local queueMax=UI.WorkshopButton(queueDialog,'Queue Max',function()
+        local snapshot,recipe,owner=UI.craftSelectedSnapshot,UI.craftSelectedRecipe,UI.recipeSelectedCharacter
+        if type(AF.GetRecipeQueueMaxAttempts)~='function' then return end
+        local qty,source=AF:GetRecipeQueueMaxAttempts(snapshot,recipe,owner)
+        if type(qty)=='number' and qty>=1 then
+            queueAmount:SetText(tostring(qty))
+            AddSelectedCraftToQueue()
+        elseif qty==0 then
+            queueNotice:SetText('Max: 0 craftable right now. Check reagents or the active profession.')
+        else
+            queueNotice:SetText(tostring(source or 'Max cannot be determined for this recipe.'))
+        end
     end)
+    queueMax:SetPoint('LEFT',queueMore,'RIGHT',7,0);queueMax:SetSize(92,28)
+    queueNotice=self:Text(queueDialog,'small',P.ink)
+    queueNotice:SetPoint('TOPLEFT',18,-148);queueNotice:SetPoint('TOPRIGHT',-18,-148)
+    queueNotice:SetHeight(33)
+    queueNotice:SetText('Quantity 1–99. Queue Max calculates live materials and adds the maximum.')
+    local queueCancel=UI.WorkshopButton(queueDialog,'Cancel',function()queueDialog:Hide()end)
+    queueCancel:SetPoint('BOTTOMLEFT',18,15);queueCancel:SetSize(145,29)
+    local queueConfirm=UI.WorkshopButton(queueDialog,'Add to Queue',AddSelectedCraftToQueue)
     queueConfirm:SetPoint('BOTTOMRIGHT',-18,15);queueConfirm:SetSize(216,29)
     local addToQueue=UI.WorkshopButton(right,'Add to Crafting Queue...',function()
         local recipe=UI.craftSelectedRecipe
@@ -1845,6 +1925,7 @@ function UI:BuildRecipes(page)
         local display=owner and AF:CharacterLabel(owner) or 'selected crafter'
         queueInfo:SetText((recipe.name or 'Recipe')..'  |  '..display..'\nChoose the number of crafts to plan for this recipe.')
         queueAmount:SetText('1')
+        queueNotice:SetText('Quantity 1–99. Queue Max calculates live materials and adds the maximum.')
         queueDialog:Show();queueDialog:Raise()
     end)
     addToQueue:SetPoint('BOTTOMLEFT',14,124)
@@ -1939,6 +2020,54 @@ function UI:BuildRecipes(page)
         local selectedKey = UI.recipeSelectedID and UI.recipeSelectedCharacter
             and (UI.recipeSelectedCharacter..':'..UI.recipeSelectedID) or nil
         UI:FillList(list,entries,function(entry) SelectRecipe(entry.item) end,selectedKey)
+        -- List rows are recycled by FillList: reset/replace scripts and arrows
+        -- every refresh so tooltips never refer to an old recipe after filters.
+        for i,entry in ipairs(entries) do
+            local button=list.rows[i]
+            if button then
+                local indicator,color=SkillIndicator(entry.item.recipe)
+                if not button.afRecipeSkillArrow then
+                    -- Make a small arrow out of 3 native color textures.
+                    -- The Forever font renders the Unicode up-arrow as a box.
+                    local arrow=CreateFrame('Frame',nil,button)
+                    arrow:SetSize(22,22)
+                    arrow:SetPoint('RIGHT',button,'RIGHT',-7,0)
+                    local function stroke(w,h,x,y,rotation)
+                        local texture=arrow:CreateTexture(nil,'OVERLAY')
+                        texture:SetColorTexture(1,1,1,1)
+                        texture:SetSize(w,h)
+                        texture:SetPoint('CENTER',arrow,'CENTER',x,y)
+                        if rotation then texture:SetRotation(rotation) end
+                        return texture
+                    end
+                    arrow.parts={
+                        stroke(3,13,0,-2),
+                        stroke(3,10,-4,5,-math.pi/4),
+                        stroke(3,10,4,5,math.pi/4),
+                    }
+                    local amount=arrow:CreateFontString(nil,'OVERLAY','GameFontNormalSmall')
+                    amount:SetPoint('RIGHT',arrow,'LEFT',0,0)
+                    amount:SetTextColor(1,1,1)
+                    arrow.amount=amount
+                    button.afRecipeSkillArrow=arrow
+                end
+                local arrow=button.afRecipeSkillArrow
+                if indicator then
+                    for _,part in ipairs(arrow.parts) do
+                        part:SetColorTexture(color[1],color[2],color[3],1)
+                    end
+                    arrow.amount:SetText(indicator>1 and tostring(indicator) or '')
+                    arrow:Show()
+                    button.label:SetPoint('BOTTOMRIGHT',button,'BOTTOMRIGHT',-40,1)
+                else
+                    arrow:Hide()
+                    button.label:SetPoint('BOTTOMRIGHT',button,'BOTTOMRIGHT',-7,1)
+                end
+                local match=entry.item
+                button:SetScript('OnEnter',function(self) RecipeHover(self,match) end)
+                button:SetScript('OnLeave',RecipeHoverLeave)
+            end
+        end
         local selected
         for _,item in ipairs(matches) do
             if item.recipe.id==UI.recipeSelectedID and item.character.key==UI.recipeSelectedCharacter then
@@ -1983,6 +2112,10 @@ function UI:BuildRecipes(page)
                 outputLine,
             }
             if levelLine ~= '' then lines[#lines+1]=levelLine end
+            local difficulty=skillColors[tonumber(row.relativeDifficulty)]
+            if difficulty then
+                lines[#lines+1]='Skill-up: '..difficulty[4]..' (last scanned)'
+            end
             lines[#lines+1] = 'Scanned: '..TimeLabel(selected.snapshot.scanned)
             if selected.recipe.learned then
                 local ready=AF:GetRecipeReadiness(selected.snapshot,selected.recipe,selected.character.key,opts.scope,1)

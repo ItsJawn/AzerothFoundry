@@ -491,7 +491,24 @@ function UI:Initialize()
                 local branch=navList:CreateTexture(nil,"BORDER")
                 branch:SetHeight(1)
                 sub.branch=branch
-                sub:SetScript("OnClick",function()UI:Switch(child.name)end)
+                sub:SetScript("OnClick",function()
+                    UI:Switch(child.name)
+                    -- This actual navigation click is a hardware event: use
+                    -- it to prepare the queue's selected profession *before*
+                    -- the separate Craft button is clicked. No crafting is
+                    -- initiated here, and slash-command/UI refresh routes
+                    -- do not silently attempt protected profession actions.
+                    if child.name=='Crafting Queue' and AF.PrepareQueuedCraftOnSelection then
+                        local project=AF:FindRecord(AF:GetCraftingQueueProjects(),UI.workshopQueueSelected)
+                        if project then
+                            local ok,msg=AF:PrepareQueuedCraftOnSelection(project)
+                            UI.workshopQueueNotice=msg
+                            local workshop=UI.pageViews and UI.pageViews['Living Workshop']
+                            local queue=workshop and workshop.subViews and workshop.subViews['Crafting Queue']
+                            if queue and queue.Refresh then queue:Refresh() end
+                        end
+                    end
+                end)
                 self.treeNavButtons[entry.name][child.name]=sub
             end
         end

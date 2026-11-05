@@ -46,8 +46,19 @@ function AF:ScanBags()
     if not self.db or self.inventoryShutdown then return false end
     local bagLimit = tonumber(NUM_BAG_SLOTS) or 4
     bagLimit = math.max(0, math.min(bagLimit, 5))
-    local indices={}
-    for i=0,bagLimit do indices[#indices+1]=i end
+    local indices,used={},{}
+    local function AddBag(index)
+        index=tonumber(index)
+        if index and index>=0 and not used[index] then
+            used[index]=true
+            indices[#indices+1]=index
+        end
+    end
+    for i=0,bagLimit do AddBag(i) end
+    -- Forever inherits Mainline's optional reagent bag (normally index 5).
+    -- Feature-detect its enum instead of assuming the Classic bag layout.
+    local bagEnum=Enum and Enum.BagIndex
+    if type(bagEnum)=='table' then AddBag(bagEnum.ReagentBag) end
     local counts = ScanContainers(indices)
     if not counts then return false end
     local key = self:GetCurrentKey()
@@ -58,13 +69,31 @@ end
 
 function AF:ScanBank()
     if not self.db or self.inventoryShutdown or not self.bankOpen then return false end
-    -- Forever is Classic-like. In the Classic container layout bank is -1,
-    -- bank bags are NUM_BAG_SLOTS+1 through +NUM_BANKBAGSLOTS.
-    -- Do not scan Retail warband or reagent-bank indexes: API layouts differ.
-    local bagCount = math.max(0, math.min(tonumber(NUM_BAG_SLOTS) or 4, 5))
-    local bankCount = math.max(0, math.min(tonumber(NUM_BANKBAGSLOTS) or 7, 8))
-    local indices={tonumber(BANK_CONTAINER) or -1}
-    for i=bagCount+1,bagCount+bankCount do indices[#indices+1]=i end
+    -- Forever uses Mainline-style character bank tabs, with a different
+    -- index range from Retail on some builds. Numeric Classic bank-bag
+    -- assumptions can misread the reagent bag and miss purchased tabs.
+    -- Enumerate only named CHARACTER bank tabs; never include account bank.
+    local indices,seen={},{}
+    local bagEnum=Enum and Enum.BagIndex
+    if type(bagEnum)=='table' then
+        for name,index in pairs(bagEnum) do
+            if type(name)=='string' and name:match('^CharacterBankTab_%d+$')
+                and type(index)=='number' and not seen[index] then
+                seen[index]=true
+                indices[#indices+1]=index
+            end
+        end
+        table.sort(indices)
+    end
+    if #indices==0 then
+        -- Do not guess Classic bag IDs on a Mainline bank implementation.
+        -- Preserve the previous snapshot until the client exposes its tabs.
+        if type(C_Bank)=='table' then return false end
+        local bagCount=math.max(0,math.min(tonumber(NUM_BAG_SLOTS) or 4,5))
+        local bankCount=math.max(0,math.min(tonumber(NUM_BANKBAGSLOTS) or 7,8))
+        indices={tonumber(BANK_CONTAINER) or -1}
+        for i=bagCount+1,bagCount+bankCount do indices[#indices+1]=i end
+    end
     local counts=ScanContainers(indices)
     if not counts then return false end
     local key=self:GetCurrentKey()

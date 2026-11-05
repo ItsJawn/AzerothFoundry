@@ -261,7 +261,9 @@ function UI:BuildAtlas(page)
                 GameTooltip:AddLine('Log into each alt once to archive its discoveries.',.62,.62,.62,true)
             end
         else
-            GameTooltip:AddLine('Progress unavailable for this zone',1,1,1)
+            GameTooltip:AddLine(page.explorationReason or 'Progress unavailable for this zone',1,1,1)
+            GameTooltip:AddLine('Foundry still records discovered map areas and visits.',.75,.72,.65,true)
+            GameTooltip:AddLine('A percentage requires Explorer criteria supplied by the game.',.65,.65,.65,true)
         end
         GameTooltip:Show()
     end)
@@ -278,6 +280,7 @@ function UI:BuildAtlas(page)
         local ok,record,reason=pcall(AF.GetAtlasExplorationProgress,AF,self.mapID,scope)
         if not ok then record=nil;reason='Progress unavailable' end
         self.explorationRecord=record
+        self.explorationReason=reason
         if record then
             explorationCount:SetText(string.format('%d/%d  %d%%',record.done,record.total,record.percent))
             local w=explorationTrack:GetWidth()
@@ -635,11 +638,19 @@ function UI:BuildAtlas(page)
             -- The high-res illustrated map is NOT the explored minimap terrain.
             -- Never blend both at once: they may have independent art crops.
             local settings=AF.db and AF.db.settings and AF.db.settings.atlas
-            if settings and settings.terrainEnabled and not
+            -- Terrain: ON must not hide useful native high-resolution art
+            -- in maps whose actual minimap tile index is not yet supported,
+            -- notably Zephras Isle (separate world/instance map).
+            -- Hide native detail only when actual minimap tiles are visible.
+            local actualTerrain=page.terrainStats and (page.terrainStats.visible or 0)>0
+            if settings and settings.terrainEnabled and actualTerrain and not
                 (page.afMapDebug and page.afMapDebug.flags.forceDetail) then alpha=0 end
             if not DebugOn('detail') then alpha=0 end
             for i=1,detailCount do detailTiles[i]:SetAlpha(alpha) end
         end
+        -- AtlasTerrain can change its availability after world-map art loads.
+        -- Refresh only this lightweight opacity layer, not the entire map.
+        page.RefreshDetailOpacity=UpdateDetailOpacity
         local function PositionDetail()
             if detailCount==0 or not detailLayer then return end
             local nw,nh=detailLayer.layerWidth,detailLayer.layerHeight

@@ -27,6 +27,96 @@ function AF:GetCollectionItemDBStatus()
     if not db then return reason, false end
     return reason, true
 end
+-- Quest rewards are not covered by the native transmog appearance source fields
+-- when the client omits sourceType. Record only reward slots actually shown in
+-- the player's quest interaction; never treat an offered choice as acquired.
+-- This is reference information, NOT a personal collection discovery.
+local VERIFIED_FOREVER_QUEST_REWARDS = {
+    -- Multiple Forever quest/item references agree on these reward choices.
+    -- Compact facts only; no copied database or proprietary implementation.
+    [263408]={questID=92463,quest='The Cirrusfly Queen',zone='Zephras Isle',kind='choice'},
+    [263409]={questID=92463,quest='The Cirrusfly Queen',zone='Zephras Isle',kind='choice'},
+    [263410]={questID=92463,quest='The Cirrusfly Queen',zone='Zephras Isle',kind='choice'},
+}
+local function Guard(fn,...)
+    if type(fn)~='function' then return nil end
+    local ok,a,b,c,d,e,f=pcall(fn,...)
+    if ok then return a,b,c,d,e,f end
+end
+function AF:CaptureQuestRewardReferences(event)
+    if event~='QUEST_DETAIL' and event~='QUEST_COMPLETE' then return 0 end
+    if not self.db or type(self.db.collections)~='table' then return 0 end
+    local questID=tonumber(Guard(GetQuestID))
+    if not questID or questID<1 then return 0 end
+    local name=Guard(GetTitleText) or (C_QuestLog and Guard(C_QuestLog.GetTitleForQuestID,questID))
+    if not Text(name) then name='Quest #'..questID end
+    local store=self.db.collections
+    store.questRewardReferences=type(store.questRewardReferences)=='table' and store.questRewardReferences or {}
+    local added=0
+    for _,kind in ipairs({'reward','choice'}) do
+        local count=tonumber(Guard(kind=='reward' and GetNumQuestRewards or GetNumQuestChoices)) or 0
+        for i=1,math.min(20,math.max(0,count)) do
+            local _,_,_,_,_,itemID=Guard(GetQuestItemInfo,kind,i)
+            itemID=ID(tonumber(itemID))
+            if itemID then
+                local itemRefs=store.questRewardReferences[itemID]
+                if type(itemRefs)~='table' then itemRefs={};store.questRewardReferences[itemID]=itemRefs end
+                local row=itemRefs[questID]
+                if type(row)~='table' then
+                    row={questID=questID,quest=name,kind=kind,firstSeen=Guard(time)}
+                    itemRefs[questID]=row
+                    added=added+1
+                else
+                    if Text(name) and name~=('Quest #'..questID) then row.quest=name end
+                    row.kind=kind
+                end
+            end
+        end
+    end
+    return added
+end
+function AF:GetCollectionQuestRewardReferences(entry)
+    if type(entry)~='table' then return {} end
+    local ids,seen,rows,used={},{},{},{}
+    local function addID(v)
+        local id=ID(tonumber(v))
+        if id and not seen[id] and #ids<24 then seen[id]=true;ids[#ids+1]=id end
+    end
+    if entry.category=='transmog' then
+        addID(entry.itemID)
+        if type(entry.sourceItems)=='table' then
+            for _,source in ipairs(entry.sourceItems) do
+                if type(source)=='table' then addID(source.itemID) end
+            end
+        end
+    elseif entry.category=='toys' then addID(entry.id)
+    elseif entry.category=='mounts' or entry.category=='pets' then addID(entry.itemID) end
+    local saved=self.db and self.db.collections and self.db.collections.questRewardReferences
+    for _,itemID in ipairs(ids) do
+        local itemRecords=type(saved)=='table' and saved[itemID] or nil
+        if type(itemRecords)=='table' then
+            for rawID,row in pairs(itemRecords) do
+                if type(row)=='table' then
+                    local id=ID(tonumber(row.questID or rawID))
+                    if id and not used[id] then
+                        used[id]=true
+                        rows[#rows+1]={label=(row.kind=='choice' and 'Quest reward choice: ' or 'Quest reward: ')..(Text(row.quest) or ('Quest #'..id)),
+                            questID=id, origin='Observed in your quest window'}
+                    end
+                end
+            end
+        end
+        local reference=VERIFIED_FOREVER_QUEST_REWARDS[itemID]
+        if reference and not used[reference.questID] then
+            used[reference.questID]=true
+            rows[#rows+1]={label='Quest reward choice: '..reference.quest..' ('..reference.zone..')',
+                questID=reference.questID,origin='Forever quest reference; not a personal discovery'}
+        end
+    end
+    table.sort(rows,function(a,b) return (a.questID or 0)<(b.questID or 0) end)
+    return rows
+end
+
 local SOURCE_LABELS={atlasloot='Dungeon/Raid drop',drop='Drop',vendor='Vendor',quest='Quest',crafted='Crafted',pvp='PvP',reputation='Reputation',gathered='Gathered',chest='Chest',world='World drop',profession='Profession'}
 local function RowDescription(row)
     if type(row)~='table' then return nil end

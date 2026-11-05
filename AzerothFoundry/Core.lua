@@ -1,7 +1,7 @@
 -- Azeroth Foundry: bootstrap and account-wide data (WoW: Forever / Interface 16001)
 local ADDON_NAME, AF = ...
 AF.name = ADDON_NAME
-AF.version = "1.0.0"
+AF.version = "1.0.12"
 AF.events = CreateFrame("Frame")
 
 local function Print(message)
@@ -263,6 +263,7 @@ AF.events:SetScript("OnEvent", function(_, event, ...)
         if AF.db and AF.CaptureCurrentAtlasDiscovery then AF:CaptureCurrentAtlasDiscovery() end
     elseif event == "QUEST_DETAIL" or event == "QUEST_PROGRESS" or event == "QUEST_COMPLETE" then
         if AF.CaptureQuestNPCDialogue then AF:CaptureQuestNPCDialogue(event) end
+        if AF.CaptureQuestRewardReferences then AF:CaptureQuestRewardReferences(event) end
     elseif event == "QUEST_ACCEPTED" then
         if AF.RecordQuestAccepted then AF:RecordQuestAccepted(...) end
         if AF.ScanQuestRecords then AF:ScanQuestRecords() end
@@ -417,6 +418,67 @@ SlashCmdList.AZEROTHFOUNDRY = function(arg)
             AF:SetMilestoneGatherDebug(value)
         end
         return
+    elseif command:match('^toycheck%s+') then
+        local value=tostring(arg or ''):match('^%s*%S+%s+(.+)$') or ''
+        local itemID=tonumber(value:match('item:(%d+)')) or tonumber(value:match('(%d+)'))
+        if not itemID then Print('Usage: /af toycheck <item ID or item link>')
+        elseif AF.ObserveOwnedToyItem then
+            local ok,msg=AF:ObserveOwnedToyItem(itemID,'manual')
+            local function probe(fn,...)
+                if type(fn)~='function' then return 'unavailable' end
+                local ok,value=pcall(fn,...)
+                if ok then return value end
+                return 'unavailable'
+            end
+            local total=probe(C_ToyBox and C_ToyBox.GetNumToys)
+            local listed=probe(C_ToyBox and C_ToyBox.GetNumFilteredToys)
+            local owned=probe(PlayerHasToy,itemID)
+            Print('Toy #'..itemID..': '..tostring(msg)..' | owned='..tostring(owned)
+                ..' | Forever catalog='..tostring(listed)..'/'..tostring(total))
+            if ok and AF.UI and AF.UI.currentPage=='Collections' then AF:RefreshUI() end
+        end
+        return
+    elseif command == 'discoverystatus' then
+        local c=AF.db and AF.db.collections or {}
+        local last=c.lastMerchantScan or {}
+        local methods=last.mountMethods or {}
+        Print('Last vendor: '..tostring(last.name or 'none')..' | slots='..tostring(last.slots or 0)
+            ..' | matched='..tostring(last.matched or 0)..' | new='..tostring(last.newlyDiscovered or 0)
+            ..' | unresolved='..tostring(last.unresolved or 0)..' | unmatched='..tostring(last.unmatched or 0))
+        Print('Mount matches: item='..tostring(methods.item or 0)..' spell='..tostring(methods.spell or 0)
+            ..' exact-name='..tostring(methods['exact-name'] or 0))
+        local count,examples=0,{}
+        for _,rec in pairs(c.discoveries or {}) do
+            if type(rec)=='table' and rec.category=='mounts' and type(rec.sources)=='table' then
+                for _,src in pairs(rec.sources) do
+                    if type(src)=='table' and src.kind=='vendor' and src.npcName==last.name then
+                        count=count+1
+                        if #examples<6 then examples[#examples+1]=tostring(rec.name or rec.id) end
+                        break
+                    end
+                end
+            end
+        end
+        Print('Discovered mounts at last vendor: '..count..' | '..table.concat(examples,', '))
+        return
+    elseif command == 'discoveryscan' then
+        if AF.CaptureMerchantCollections then
+            local count,message=AF:CaptureMerchantCollections()
+            Print(message or ('Recorded '..tostring(count)..' collectibles'))
+            if AF.UI and AF.UI.currentPage=='Collections' then AF:RefreshUI() end
+        end
+        return
+    elseif command == "toystatus" then
+        local d=AF.collectionToyCatalogDiagnostics or {}
+        Print('Toy catalog: visible='..tostring(d.native)..' total='..tostring(d.total)
+            ..' | PlayerHasToy='..tostring(type(PlayerHasToy))
+            ..' | Toy tooltip='..tostring(C_TooltipInfo and type(C_TooltipInfo.GetToyByItemID)))
+        if AF.GetToyDiscoveryAudit then
+            local valid,hidden=AF:GetToyDiscoveryAudit()
+            Print('Saved toy discoveries: verified='..tostring(valid)..' | unverified hidden='..tostring(hidden)
+                ..' (original records preserved for later revalidation)')
+        end
+        return
     elseif command == "craftstatus" then
         local projects=AF.GetCraftingQueueProjects and AF:GetCraftingQueueProjects() or {}
         local selected=AF.UI and AF.UI.workshopQueueSelected
@@ -491,7 +553,7 @@ SlashCmdList.AZEROTHFOUNDRY = function(arg)
         Print(AF:QuestReferenceStatus())
         return
     elseif command == "help" then
-        Print("/af - journal, /af guide, /af theme, /af initiation, /af initiationpreview, /af settings, /af deps, /af atlas, /af recap, /af goals (or projects), /af workshop, /af recipes, /af queue, /af materials, /af notes, /af gatherdebug, /af gatherstatus, /af craftstatus, /af recipescan, /af bags, /af scan, /af minimap, /af testtoast, /af testmilestonetoast, /af testcomplete, /af tracker.")
+        Print("/af - journal, /af guide, /af theme, /af initiation, /af initiationpreview, /af settings, /af deps, /af atlas, /af recap, /af goals (or projects), /af workshop, /af recipes, /af queue, /af materials, /af notes, /af gatherdebug, /af gatherstatus, /af craftstatus, /af toycheck <itemID>, /af toystatus, /af discoverystatus, /af discoveryscan, /af recipescan, /af bags, /af scan, /af minimap, /af testtoast, /af testmilestonetoast, /af testcomplete, /af tracker.")
     elseif command == 'mapdebug' then
         local page=AF.UI and AF.UI.pageViews and AF.UI.pageViews.Exploration
         if page and page.ToggleMapDebug then

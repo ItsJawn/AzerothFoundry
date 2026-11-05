@@ -14,6 +14,66 @@ local function ItemID(link)
     return tonumber(link:match('item:(%d+)'))
 end
 local function AnyStr(s) return type(s)=='string' and s~='' and s or nil end
+local function ToyOwned(itemID)
+    itemID=tonumber(itemID)
+    if not itemID or itemID<=0 then return false end
+    -- Forever exposes the normal global ownership check, not necessarily a
+    -- C_ToyBox.HasToy method (which is absent in documented 1.60.1 APIs).
+    if type(PlayerHasToy)=='function' and Safe(PlayerHasToy,itemID)==true then return true end
+    return C_ToyBox and Safe(C_ToyBox.HasToy,itemID)==true or false
+end
+local function ToyTooltipData(itemID)
+    if not C_TooltipInfo or type(C_TooltipInfo.GetToyByItemID)~='function' then return nil end
+    local data=Safe(C_TooltipInfo.GetToyByItemID,itemID)
+    if type(data)~='table' then return nil end
+    local kind=Enum and Enum.TooltipDataType and Enum.TooltipDataType.Toy or 19
+    if tonumber(data.type)==tonumber(kind) then return data end
+end
+local function NativeToySource(itemID)
+    local tooltip=ToyTooltipData(itemID)
+    if not tooltip or type(tooltip.lines)~='table' then return nil end
+    local sourceType=Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.ToySource or 29
+    for _,line in ipairs(tooltip.lines) do
+        if type(line)=='table' and tonumber(line.type)==tonumber(sourceType) then
+            local text=AnyStr(line.leftText) or AnyStr(line.rightText)
+            if text then return text end
+        end
+    end
+end
+-- IMPORTANT: A cached item name or generic toy-shaped tooltip is not proof
+-- of toy classification. Forever can echo ANY itemID through GetToyInfo and
+-- C_TooltipInfo.GetToyByItemID can return a blank shell for an ordinary item.
+-- Only a native Toy Box index, an actual toy link, confirmed ownership, or an
+-- independently checked Forever toy itemID may establish this category.
+-- Keep this tiny explicit exception for a Forever collector-edition toy when
+-- the native Toy Box is empty. This only VALIDATES an item actually observed;
+-- it never makes the item appear in the discovery list on its own.
+local VERIFIED_FOREVER_TOY_ITEMS = { [280740] = true } -- Shen'dorei Windwell
+local nativeToyIDs = {}
+local verifiedToyIDs = {}
+local function IsVerifiedToy(itemID)
+    itemID=tonumber(itemID)
+    if not itemID or itemID<=0 then return false end
+    if VERIFIED_FOREVER_TOY_ITEMS[itemID] or nativeToyIDs[itemID] then return true end
+    if ToyOwned(itemID) then verifiedToyIDs[itemID]=true;return true end
+    if verifiedToyIDs[itemID] then return true end
+    -- GetToyLink's documented result is nil for non-toys. The link must
+    -- identify THIS item rather than merely being a nonempty generic string.
+    local link=C_ToyBox and Safe(C_ToyBox.GetToyLink,itemID)
+    if ItemID(link)==itemID then verifiedToyIDs[itemID]=true;return true end
+    return false -- never trust GetToyInfo or a tooltip shell by itself
+end
+local function ToyItemInfo(itemID)
+    itemID=tonumber(itemID)
+    if not IsVerifiedToy(itemID) then return nil end
+    local id,name,icon
+    if C_ToyBox then id,name,icon=Safe(C_ToyBox.GetToyInfo,itemID) end
+    if tonumber(id)==itemID then return name,icon,NativeToySource(itemID),true end
+    local itemName=type(GetItemInfo)=='function' and Safe(GetItemInfo,itemID) or nil
+    local itemIcon=type(GetItemIcon)=='function' and Safe(GetItemIcon,itemID) or nil
+    return itemName,itemIcon,NativeToySource(itemID),true
+end
+
 -- Pet species lookup can be missing from the filtered beta journal even when
 -- GetPetInfoByItemID still knows the species of a vendor's companion item.
 -- The documented 12th return is creatureDisplayID; the 13th is speciesID.
@@ -150,7 +210,24 @@ end
 function AF:CollectionsStore() return self.db and self.db.collections end
 function AF:CollectionDiscovery(cat,id)
     local c=self:CollectionsStore()
-    return c and c.discoveries[K(cat,id)]
+    local rec=c and c.discoveries[K(cat,id)]
+    -- v1.0.8-v1.0.11 may have stored ordinary vendor/bag items as toys.
+    -- Quarantine is VIEW-ONLY: don't delete or rewrite old observations.
+    -- A record automatically becomes visible again if valid toy evidence
+    -- becomes available, preserving its original vendor, price and timestamps.
+    if cat=='toys' and rec and not IsVerifiedToy(id) then return nil end
+    return rec
+end
+function AF:GetToyDiscoveryAudit()
+    local c=self:CollectionsStore()
+    local recognized,unverified=0,0
+    for _,rec in pairs(c and c.discoveries or {}) do
+        if type(rec)=='table' and rec.category=='toys' then
+            if IsVerifiedToy(rec.id) then recognized=recognized+1
+            else unverified=unverified+1 end
+        end
+    end
+    return recognized,unverified
 end
 function AF:ObserveCollectible(cat,id,observation)
     if not CATEGORIES[cat] or type(id)~='number' or id<=0 or not self:CollectionsStore() then return end
@@ -172,6 +249,65 @@ function AF:ObserveCollectible(cat,id,observation)
         rec.lastSourceKey=sourceKey
     end
     return rec
+end
+-- Recovery path for Forever clients whose native Toy Box catalog returns zero.
+-- Only inventory-held items and positively verified ownership are recorded.
+-- A filtered native catalog is never treated as proof of discovery.
+function AF:GetNativeToySource(itemID) return NativeToySource(itemID) end
+function AF:ObserveOwnedToyItem(itemID,reason)
+    itemID=tonumber(itemID)
+    local name,icon,source,valid=ToyItemInfo(itemID)
+    if not valid then return false,'The client does not identify this item as a toy' end
+    if reason=='manual' and not ToyOwned(itemID) then
+        return false,'This item is not reported as learned in the Toy Box'
+    end
+    local old=self:CollectionDiscovery('toys',itemID)
+    local rec=self:ObserveCollectible('toys',itemID)
+    if not rec then return false,'Collection registry is unavailable' end
+    rec.name=AnyStr(name) or rec.name or (type(GetItemInfo)=='function' and Safe(GetItemInfo,itemID))
+    rec.icon=icon or rec.icon or (type(GetItemIcon)=='function' and Safe(GetItemIcon,itemID))
+    if AnyStr(source) then rec.source=source end
+    if type(rec.sources)~='table' then rec.sources={} end
+    if reason=='inventory' then
+        local key='inventory:'..tostring(self.GetCurrentKey and self:GetCurrentKey() or 'current')
+        local observed=rec.sources[key] or {firstSeen=Now()}
+        observed.kind='inventory';observed.itemID=itemID;observed.lastSeen=Now()
+        rec.sources[key]=observed
+        rec.lastSourceKey=key
+    end
+    return true,old==nil and 'Toy added to discoveries' or 'Toy discovery refreshed'
+end
+function AF:ScanCarriedToys()
+    if not self:CollectionsStore() then return 0 end
+    local cc=C_Container
+    local getSlots=cc and cc.GetContainerNumSlots or GetContainerNumSlots
+    local getID=cc and cc.GetContainerItemID or GetContainerItemID
+    if type(getSlots)~='function' or type(getID)~='function' then return 0 end
+    local bags={0,1,2,3,4}
+    local reagent=Enum and Enum.BagIndex and tonumber(Enum.BagIndex.ReagentBag)
+    if reagent and reagent>=0 and reagent~=0 and reagent~=1 and reagent~=2
+        and reagent~=3 and reagent~=4 then bags[#bags+1]=reagent end
+    local newCount=0
+    local seen={}
+    self._toyNegativeInventoryCache=self._toyNegativeInventoryCache or {}
+    local rejected=self._toyNegativeInventoryCache
+    local clock=type(GetTime)=='function' and GetTime() or Now()
+    for _,bag in ipairs(bags) do
+        local count=math.min(math.max(tonumber(Safe(getSlots,bag)) or 0,0),80)
+        for slot=1,count do
+            local itemID=tonumber(Safe(getID,bag,slot))
+            if itemID and itemID>0 and not seen[itemID] then
+                seen[itemID]=true
+                local was=self:CollectionDiscovery('toys',itemID)
+                if not was and (not rejected[itemID] or clock-rejected[itemID]>=30 or ToyOwned(itemID)) then
+                    local ok=self:ObserveOwnedToyItem(itemID,'inventory')
+                    if ok then newCount=newCount+1;rejected[itemID]=nil
+                    else rejected[itemID]=clock end
+                end
+            end
+        end
+    end
+    return newCount
 end
 function AF:CollectionModelPose(cat,id)
     local c=self:CollectionsStore()
@@ -351,8 +487,9 @@ function AF:GetCollectionCatalog(cat)
             for i=1,count do
                 local id=tonumber(Safe(tb.GetToyFromIndex,i))
                 if id and id>0 then
+                    nativeToyIDs[id]=true -- verified by the native filtered Toy Box index
                     local _,name,icon=Safe(tb.GetToyInfo,id)
-                    local owned=Safe(tb.HasToy,id)
+                    local owned=ToyOwned(id)
                     add({id=id,name=name,icon=icon,owned=owned})
                     nativeCount=nativeCount+1
                 end
@@ -483,7 +620,8 @@ function AF:GetCollectionCatalog(cat)
     -- Saved observations may be browsed even if the client's current filters hide them.
     local c=self:CollectionsStore()
     for _,rec in pairs(c and c.discoveries or {}) do
-        if type(rec)=='table' and rec.category==cat and tonumber(rec.id) then
+        if type(rec)=='table' and rec.category==cat and tonumber(rec.id)
+            and (cat~='toys' or IsVerifiedToy(rec.id)) then
             if cat=='pets' then KnownPetInfo(rec) end
             local native=seen[rec.id]
             if native then
@@ -495,12 +633,16 @@ function AF:GetCollectionCatalog(cat)
                 native.icon=native.icon or rec.icon
                 native.displayID=native.displayID or rec.displayID
                 native.creatureID=native.creatureID or rec.creatureID
-                native.source=native.source or rec.source
-                native.description=native.description or rec.description
+                    native.source=AnyStr(native.source) or AnyStr(rec.source)
+                native.description=AnyStr(native.description) or AnyStr(rec.description)
+                if cat=='toys' then
+                    native.owned=ToyOwned(rec.id) or native.owned
+                end
             else
                 add({id=rec.id,name=rec.name or (cat..' #'..rec.id),icon=rec.icon,
-                    owned=false,observedOnly=true,displayID=rec.displayID,
-                    creatureID=rec.creatureID,source=rec.source,description=rec.description})
+                    owned=(cat=='toys' and ToyOwned(rec.id)) or false,observedOnly=true,displayID=rec.displayID,
+                    creatureID=rec.creatureID,source=rec.source,
+                    description=rec.description})
             end
         end
     end
@@ -511,54 +653,143 @@ function AF:GetCollectionCatalog(cat)
     return result
 end
 
+-- Merchant mount resolution must not depend on a single client item-to-mount
+-- association. Forever can show a mount in the journal while omitting the
+-- item mapping or delaying item-spell information until the cache fills.
+-- Use native item -> mount, then spell -> mount, then a uniquely matching native
+-- mount name. Name matching never uses substrings: e.g. Regal Galestrider must
+-- not accidentally match Swift Regal Galestrider.
+local function MerchantMountKey(name)
+    name=AnyStr(name)
+    if not name then return nil end
+    name=name:match('^%s*(.-)%s*$'):lower()
+    -- Strip only explicit mount-item prefixes. Do NOT broadly remove words
+    -- such as Swift or Stormy; those distinguish different mount records.
+    local stripped=false
+    for _,prefix in ipairs({'reins of ','reins: ','bridle of ','harness of ',
+                            'whistle of ','horn of ','idol of '}) do
+        if name:sub(1,#prefix)==prefix then
+            name=name:sub(#prefix+1)
+            stripped=true
+            break
+        end
+    end
+    if stripped then name=name:gsub('^the ','') end
+    name=name:gsub(' reins$',''):gsub(' bridle$','')
+    return name~='' and name or nil
+end
+local merchantMountNameCache,merchantMountNameCacheAt
+local function MountNameIndex()
+    local clock=(type(GetTime)=='function' and GetTime()) or Now()
+    if merchantMountNameCache and merchantMountNameCacheAt
+        and clock-merchantMountNameCacheAt<30 and clock>=merchantMountNameCacheAt then
+        return merchantMountNameCache
+    end
+    local ids=C_MountJournal and Safe(C_MountJournal.GetMountIDs)
+    if type(ids)~='table' or #ids==0 then return {} end
+    local names={}
+    for i=1,math.min(#ids,8000) do
+        local id=tonumber(ids[i])
+        local name=id and Safe(C_MountJournal.GetMountInfoByID,id)
+        local key=MerchantMountKey(name)
+        if key then
+            if names[key]==nil then names[key]=id
+            elseif names[key]~=id then names[key]=false end -- ambiguous
+        end
+    end
+    merchantMountNameCache=names
+    merchantMountNameCacheAt=clock
+    return names
+end
+local function MountIDFromMerchantItem(itemID,merchantName,merchantSpellID)
+    local mj=C_MountJournal
+    if not mj or not itemID then return nil end
+    local id=tonumber(Safe(mj.GetMountFromItem,itemID))
+    if id and id>0 then return id,'item' end
+    local spell=tonumber(merchantSpellID)
+    if not spell then
+        local _,fromItem=Safe(C_Item and C_Item.GetItemSpell or GetItemSpell,itemID)
+        spell=tonumber(fromItem)
+    end
+    if spell and spell>0 then
+        id=tonumber(Safe(mj.GetMountFromSpell,spell))
+        if id and id>0 then return id,'spell' end
+    end
+    -- Use only a unique, exact name from the actual live mount journal.
+    -- This is intentionally not a general fuzzy item classifier.
+    local key=MerchantMountKey(merchantName)
+    id=key and MountNameIndex()[key]
+    if type(id)=='number' and id>0 then return id,'exact-name' end
+    return nil
+end
 function AF:CaptureMerchantCollections()
     local c=self:CollectionsStore()
-    if not c or not (C_MerchantFrame or GetMerchantNumItems) then return 0, 'Collection registry unavailable' end
+    if not c or not (C_MerchantFrame or GetMerchantNumItems) then return 0,'Collection registry unavailable' end
     local getCount=GetMerchantNumItems or (C_MerchantFrame and C_MerchantFrame.GetNumItems)
     local getInfo=C_MerchantFrame and C_MerchantFrame.GetItemInfo or GetMerchantItemInfo
     local getLink=GetMerchantItemLink or (C_MerchantFrame and C_MerchantFrame.GetItemLink)
+    local getID=GetMerchantItemID
     local count=tonumber(Safe(getCount)) or 0
     local guid=type(UnitGUID)=='function' and UnitGUID('npc') or nil
     local npc=type(UnitName)=='function' and UnitName('npc') or nil
-    if count<1 or not npc then return 0,'No readable merchant inventory/NPC' end
-    local mapID, x,y
+    if count<1 or not npc then
+        c.lastMerchantScan={name=npc or 'Unknown',at=Now(),slots=count,matched=0,
+            newlyDiscovered=0,unresolved=math.max(0,count),reason='Inventory or NPC not ready'}
+        return 0,'Merchant inventory or NPC not ready (will retry if open)'
+    end
+    local mapID,x,y
     if C_Map and type(C_Map.GetBestMapForUnit)=='function' then
         mapID=Safe(C_Map.GetBestMapForUnit,'player')
         local pos=mapID and Safe(C_Map.GetPlayerMapPosition,mapID,'player')
         if pos and type(pos.GetXY)=='function' then x,y=Safe(pos.GetXY,pos) end
     end
-    local found=0
+    local found,newFound,unresolved,unmatched=0,0,0,0
+    local methods={item=0,spell=0,['exact-name']=0}
     for i=1,math.min(count,250) do
-        local link=Safe(getLink,i)
-        local itemID=ItemID(link)
-        if itemID then
-            local price,quantity,merchantItemName,merchantTexture
+        local itemID=tonumber(Safe(getID,i))
+        local link
+        if not itemID or itemID<=0 then
+            link=Safe(getLink,i)
+            itemID=ItemID(link)
+        end
+        if not itemID or itemID<=0 then
+            unresolved=unresolved+1
+        else
+            local price,quantity,merchantItemName,merchantTexture,merchantSpellID
             local info=Safe(getInfo,i)
             if type(info)=='table' then
                 price=info.price;quantity=info.stackCount
                 merchantItemName=info.name;merchantTexture=info.texture
+                merchantSpellID=info.spellID
             else
                 merchantItemName,merchantTexture,price,quantity=Safe(getInfo,i)
             end
-            local cat,id,petName,petIcon,petDisplayID,petCreatureID,petSource,petDescription
-            if C_MountJournal then id=tonumber(Safe(C_MountJournal.GetMountFromItem,itemID));if id then cat='mounts' end end
+            -- The link name is sometimes cached before MerchantItemInfo.name.
+            if not AnyStr(merchantItemName) then
+                link=link or Safe(getLink,i)
+                if type(link)=='string' then merchantItemName=link:match('%[(.-)%]') end
+            end
+            local cat,id,method,petName,petIcon,petDisplayID,petCreatureID,petSource,petDescription
+            id,method=MountIDFromMerchantItem(itemID,merchantItemName,merchantSpellID)
+            if id then cat='mounts';methods[method]=(methods[method] or 0)+1 end
             if not id and C_PetJournal then
                 id,petName,petIcon,petDisplayID,petCreatureID,petSource,petDescription=PetFromItem(itemID)
-                if id then cat='pets' end
+                if id and id>0 then cat='pets' end
             end
-            if not id and C_ToyBox then
-                local toyID=Safe(C_ToyBox.GetToyInfo,itemID)
-                if tonumber(toyID)==itemID then cat='toys';id=itemID end
+            if not id then
+                -- Never classify arbitrary vendor inventory as a toy based
+                -- on GetToyInfo's itemID echo or a generic toy tooltip.
+                local _,_,_,isToy=ToyItemInfo(itemID)
+                if isToy then cat='toys';id=itemID end
             end
-            if cat and id then
+            if cat and id and id>0 then
+                if not self:CollectionDiscovery(cat,id) then newFound=newFound+1 end
                 local rec=self:ObserveCollectible(cat,id,{kind='vendor',npcGUID=guid,npcName=npc,
                     itemID=itemID,mapID=mapID,x=x,y=y,price=price,quantity=quantity})
                 if rec then
                     local name=type(GetItemInfo)=='function' and Safe(GetItemInfo,itemID) or nil
                     local icon=type(GetItemIcon)=='function' and Safe(GetItemIcon,itemID) or nil
                     if cat=='pets' then
-                        -- Species metadata takes precedence over the vendor's
-                        -- 'Cat Carrier (...)' item name when the API provides it.
                         rec.name=petName or rec.name or AnyStr(merchantItemName) or AnyStr(name)
                         rec.icon=petIcon or rec.icon or icon or merchantTexture
                         if petDisplayID and petDisplayID>0 then rec.displayID=petDisplayID end
@@ -567,29 +798,118 @@ function AF:CaptureMerchantCollections()
                         rec.description=AnyStr(petDescription) or rec.description
                         KnownPetInfo(rec)
                     else
-                        rec.name=rec.name or AnyStr(name)
-                        rec.icon=rec.icon or icon
+                        if cat=='mounts' then
+                            local nativeName,_,nativeIcon=Safe(C_MountJournal.GetMountInfoByID,id)
+                            rec.name=AnyStr(nativeName) or rec.name or AnyStr(name) or AnyStr(merchantItemName)
+                            rec.icon=nativeIcon or rec.icon or icon or merchantTexture
+                        else
+                            rec.name=rec.name or AnyStr(name) or AnyStr(merchantItemName)
+                            rec.icon=rec.icon or icon or merchantTexture
+                            if cat=='toys' then rec.source=NativeToySource(itemID) or rec.source end
+                        end
                     end
                     found=found+1
                 end
+            else
+                unmatched=unmatched+1
             end
         end
     end
-    c.lastMerchantScan={name=npc,mapID=mapID,x=x,y=y,at=Now(),slots=count,matched=found}
-    return found, 'Scanned '..count..' merchant slots; cataloged '..found..' recognizable collectibles.'
+    c.lastMerchantScan={name=npc,mapID=mapID,x=x,y=y,at=Now(),slots=count,
+        matched=found,newlyDiscovered=newFound,unresolved=unresolved,unmatched=unmatched,
+        mountMethods=methods}
+    return found,'Scanned '..count..' merchant slots; recorded '..found..' recognizable collectibles ('..newFound..' new).',newFound
 end
 
--- Discovery-only listeners. Never purchase an item, move a character, or initiate a screenshot.
+-- Discovery-only listeners. Nothing here purchases items or reveals unseen catalogs.
+-- Merchant stock may not be ready on MERCHANT_SHOW; links may finish loading later.
+-- Listen for updates and do two bounded catch-up passes, even if Foundry is closed.
 local listener=CreateFrame('Frame')
-for _,event in ipairs({'MERCHANT_SHOW','NEW_MOUNT_ADDED','NEW_PET_ADDED','TOYS_UPDATED','TRANSMOG_COLLECTION_UPDATED'}) do
-    pcall(listener.RegisterEvent,listener,event) -- Forever may omit individual events
+for _,event in ipairs({'MERCHANT_SHOW','MERCHANT_UPDATE','MERCHANT_CLOSED',
+    'NEW_MOUNT_ADDED','NEW_PET_ADDED','TOYS_UPDATED','TRANSMOG_COLLECTION_UPDATED',
+    'PLAYER_ENTERING_WORLD','BAG_UPDATE_DELAYED'}) do
+    pcall(listener.RegisterEvent,listener,event) -- Some clients omit individual events.
+end
+local merchantSession,merchantOpen,merchantUpdatePending=0,false,false
+local function ScanCurrentMerchant()
+    if not merchantOpen or not AF.db or not AF.db.collections then return end
+    local ok,found,_,newCount=pcall(AF.CaptureMerchantCollections,AF)
+    if not ok then
+        if AF.Print then AF.Print('Collections merchant scan: '..tostring(found)) end
+        return
+    end
+    -- UI refresh is only needed for actual new discoveries; saved data does
+    -- not depend on the Foundry window being open.
+    if (tonumber(newCount) or 0)>0 and AF.UI and AF.UI.currentPage=='Collections' then
+        AF:RefreshUI()
+    end
+end
+local function ScheduleMerchantScan(delay)
+    if not C_Timer or type(C_Timer.After)~='function' then return end
+    local session=merchantSession
+    C_Timer.After(delay,function()
+        if not merchantOpen or merchantSession~=session then return end
+        -- Reject callbacks after the vendor window closes, including unusual
+        -- clients which omit the MERCHANT_CLOSED event.
+        if MerchantFrame and type(MerchantFrame.IsShown)=='function'
+            and not MerchantFrame:IsShown() then return end
+        ScanCurrentMerchant()
+    end)
 end
 listener:SetScript('OnEvent',function(_,event)
+    if event=='MERCHANT_CLOSED' then
+        merchantOpen=false
+        merchantSession=merchantSession+1
+        merchantUpdatePending=false
+        return
+    end
     if not AF.db or not AF.db.collections then return end
-    if event=='TRANSMOG_COLLECTION_UPDATED' then AF.collectionClassEligibilityCache=nil end
     if event=='MERCHANT_SHOW' then
-        local ok,err=pcall(AF.CaptureMerchantCollections,AF)
-        if not ok and AF.Print then AF.Print('Collections merchant scan: '..tostring(err)) end
+        merchantSession=merchantSession+1
+        merchantOpen=true
+        merchantUpdatePending=false
+        ScanCurrentMerchant()
+        ScheduleMerchantScan(0.25)
+        ScheduleMerchantScan(1.0)
+        ScheduleMerchantScan(2.5) -- final bounded retry for delayed Forever item cache
+        return
+    elseif event=='MERCHANT_UPDATE' and merchantOpen then
+        -- Merchant updates sometimes burst while buying or loading stock.
+        -- Coalesce each burst to one scan, with zero polling when no vendor is open.
+        if not merchantUpdatePending then
+            merchantUpdatePending=true
+            local session=merchantSession
+            if C_Timer and type(C_Timer.After)=='function' then
+                C_Timer.After(0.12,function()
+                    if merchantSession~=session then return end
+                    merchantUpdatePending=false
+                    if merchantOpen then ScanCurrentMerchant() end
+                end)
+            else
+                merchantUpdatePending=false
+                ScanCurrentMerchant()
+            end
+        end
+        return
+    end
+    if event=='NEW_MOUNT_ADDED' then merchantMountNameCache=nil end
+    if event=='TRANSMOG_COLLECTION_UPDATED' then AF.collectionClassEligibilityCache=nil end
+    if event=='TOYS_UPDATED' then AF._toyNegativeInventoryCache=nil;verifiedToyIDs={} end
+    if event=='PLAYER_ENTERING_WORLD' or event=='BAG_UPDATE_DELAYED' or event=='TOYS_UPDATED' then
+        -- At most one pending scan across repeated BAG_UPDATE_DELAYED bursts.
+        if not AF._toyBagScanPending then
+            AF._toyBagScanPending=true
+            local function scan()
+                AF._toyBagScanPending=false
+                if not AF.db or not AF.db.collections then return end
+                local newToys=AF:ScanCarriedToys()
+                if newToys>0 and AF.UI and AF.UI.currentPage=='Collections' then AF:RefreshUI() end
+            end
+            if C_Timer and type(C_Timer.After)=='function' then
+                C_Timer.After(event=='PLAYER_ENTERING_WORLD' and 1 or .4,scan)
+            else scan() end
+        end
+        if event~='TOYS_UPDATED' then return end
     end
     if AF.UI and AF.UI.currentPage=='Collections' then AF:RefreshUI() end
 end)

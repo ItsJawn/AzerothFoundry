@@ -5,6 +5,13 @@ local P=UI.palette
 local CAT={{'mounts','Mounts'},{'pets','Companions / Pets'},{'toys','Toys'},{'transmog','Transmog'}}
 local MYSTERY_ICON='Interface\\Icons\\INV_Misc_QuestionMark'
 local SOURCE_TYPES={[1]='Drop',[2]='Quest',[3]='Vendor',[4]='Profession',[5]='Pet battle / other',[6]='Achievement',[7]='World event',[8]='Promotion',[9]='Trading card',[10]='Shop',[11]='Discovery'}
+local TRANSMOG_SOURCES={[1]='Encounter / instance journal',[2]='Quest',[3]='Vendor',[4]='World drop',
+    [5]='Hidden until collected',[6]='Not collectible',[7]='Achievement',[8]='Profession',
+    [9]='Invalid transmog source',[10]='Trading Post'}
+local function TransmogSourceLabel(value)
+    local id=tonumber(value)
+    return id and (TRANSMOG_SOURCES[id] or ('Client source category #'..id)) or nil
+end
 local function HasSourceText(value)
     return type(value)=='string' and value:match('%S') ~= nil
 end
@@ -188,7 +195,11 @@ local function ResolveAppearance(entry)
             end
             local name=(type(sourceName)=='string' and sourceName~='') and sourceName or nil
             local quality=(name and 3 or 0)+(icon and 2 or 0)+(itemID and 1 or 0)
-            entry.sourceItems[#entry.sourceItems+1]={sourceID=sourceID,itemID=itemID,name=name,icon=icon}
+            local categoryType=(info and info.sourceType) or (type(srcInfo)=='table' and srcInfo.sourceType)
+            entry.sourceItems[#entry.sourceItems+1]={sourceID=sourceID,itemID=itemID,name=name,icon=icon,sourceType=categoryType}
+            if not entry.acquisitionType and tonumber(categoryType) and tonumber(categoryType)>0 then
+                entry.acquisitionType=tonumber(categoryType)
+            end
             if quality>bestQuality then
                 bestQuality=quality;bestName=name;bestIcon=icon;bestID=itemID
                 bestSource=sourceID;bestNameOrigin=nameOrigin
@@ -503,7 +514,7 @@ local function EntryDiagnostics(entry)
         'Owned: '..tostring(entry.owned)..' | Personally observed: '..tostring(rec~=nil),
         'Saved observation sources: '..tostring(savedCount)..' | Last vendor: '..tostring(recent and recent.npcName),
         'Last observed item: '..tostring(recent and recent.itemID)..' | Map: '..tostring(recent and recent.mapID),
-        'Source type: '..tostring(entry.sourceType)..' | Client hidden: '..tostring(entry.clientHidden),
+        'Native category: '..tostring(entry.category=='transmog' and entry.acquisitionType or entry.sourceType)..' | Client hidden: '..tostring(entry.clientHidden),
         'Client source: '..tostring(entry.source),
         'Appearance sources: '..tostring(entry.sourceCount)..' | Checked: '..tostring(entry.sourceChecked),
         'Source ID: '..tostring(entry.sourceID)..' | Item ID: '..tostring(entry.itemID),
@@ -1108,9 +1119,12 @@ function UI:BuildCollections(page)
                         if self.entry.clientHidden then
                             GameTooltip:AddLine('Client-hidden; availability unverified.',1,.64,.3,true)
                         end
-                    elseif self.entry.category=='pets' and HasSourceText(self.entry.source) then
+                    elseif (self.entry.category=='pets' or self.entry.category=='toys') and HasSourceText(self.entry.source) then
                         GameTooltip:AddLine('Client source: '..self.entry.source,.86,.79,.62,true)
                     elseif self.entry.category=='transmog' then
+                        if self.entry.acquisitionType then
+                            GameTooltip:AddLine('Client category: '..tostring(TransmogSourceLabel(self.entry.acquisitionType)),.85,.82,.71,true)
+                        end
                         local sourceInfo=self.entry.sourceItems and self.entry.sourceItems[1]
                         if sourceInfo then
                             GameTooltip:AddLine('Source item: '..tostring(sourceInfo.name or sourceInfo.itemID or 'Unknown'),.86,.79,.62,true)
@@ -1118,7 +1132,11 @@ function UI:BuildCollections(page)
                     end
                     if observed and observed.lastSourceKey and observed.sources then
                         local origin=observed.sources[observed.lastSourceKey]
-                        if origin then GameTooltip:AddLine('Encountered at: '..tostring(origin.npcName or 'Unknown vendor'),.27,.85,.48,true) end
+                        if origin and origin.kind=='vendor' then
+                            GameTooltip:AddLine('Encountered at: '..tostring(origin.npcName or 'Unidentified merchant'),.27,.85,.48,true)
+                        elseif origin and origin.kind=='inventory' then
+                            GameTooltip:AddLine('Seen in your bags',.27,.85,.48,true)
+                        end
                     end
                 end
                 GameTooltip:AddLine('Click to inspect. Model availability varies by client.',.85,.82,.71,true)
@@ -1817,11 +1835,15 @@ function UI:BuildCollections(page)
             'Mount API '..tostring(C_MountJournal and type(C_MountJournal.GetMountIDs)),
             'Pet API '..tostring(C_PetJournal and type(C_PetJournal.GetNumPets)),
             'Toy API '..tostring(C_ToyBox and type(C_ToyBox.GetNumFilteredToys)),
+            'PlayerHasToy '..tostring(type(PlayerHasToy)),
+            'Native toy source tooltip '..tostring(C_TooltipInfo and type(C_TooltipInfo.GetToyByItemID)),
             'Transmog API '..tostring(C_TransmogCollection and type(C_TransmogCollection.GetCategoryAppearances)),
             'Merchant API '..tostring(C_MerchantFrame and type(C_MerchantFrame.GetItemInfo)),
             'LibItemDB: '..tostring(AF.GetCollectionItemDBStatus and AF:GetCollectionItemDBStatus() or 'not integrated'),
             'Last merchant '..tostring(c.lastMerchantScan and c.lastMerchantScan.name or 'none'),
             'Last merchant scan: '..tostring(c.lastMerchantScan and c.lastMerchantScan.slots or 'unknown')..' slots / '..tostring(c.lastMerchantScan and c.lastMerchantScan.matched or 'unknown')..' matches',
+            'Last vendor unresolved: '..tostring(c.lastMerchantScan and c.lastMerchantScan.unresolved or 0)..' / unmatched: '..tostring(c.lastMerchantScan and c.lastMerchantScan.unmatched or 0)..' / new: '..tostring(c.lastMerchantScan and c.lastMerchantScan.newlyDiscovered or 0),
+            'Mount matched by item/spell/name: '..tostring(c.lastMerchantScan and c.lastMerchantScan.mountMethods and c.lastMerchantScan.mountMethods.item or 0)..'/'..tostring(c.lastMerchantScan and c.lastMerchantScan.mountMethods and c.lastMerchantScan.mountMethods.spell or 0)..'/'..tostring(c.lastMerchantScan and c.lastMerchantScan.mountMethods and c.lastMerchantScan.mountMethods['exact-name'] or 0),
             'All appearance sources API '..tostring(C_TransmogCollection and type(C_TransmogCollection.GetAllAppearanceSources)),
             'Source icon API '..tostring(C_TransmogCollection and type(C_TransmogCollection.GetSourceIcon)),
             'Transmog class selection: '..tostring(AF.GetCollectionTransmogClassChoice and AF:GetCollectionTransmogClassChoice()),
@@ -2074,6 +2096,9 @@ function UI:BuildCollections(page)
             return
         end
         page:ResolveTransmog(entry)
+        if entry.category=='toys' and not HasSourceText(entry.source) and AF.GetNativeToySource then
+            entry.source=AF:GetNativeToySource(entry.id)
+        end
         local rec=AF:CollectionDiscovery(entry.category,entry.id)
         local observed=PersonalSources(rec)
         local reveal=AF.db.collections.settings.revealAll==true
@@ -2141,12 +2166,16 @@ function UI:BuildCollections(page)
                     line(DetailNote('External reference - verify against the Forever beta.'))
                     specific=true
                 end
-            elseif entry.category=='pets' then
+            elseif entry.category=='pets' or entry.category=='toys' then
                 if HasSourceText(entry.source) then
-                    line(DetailLabel('Game Journal: ',entry.source))
+                    line(DetailLabel(entry.category=='toys' and 'Toy tooltip: ' or 'Game Journal: ',entry.source))
                     specific=true
                 end
             elseif entry.category=='transmog' then
+                if entry.acquisitionType then
+                    line(DetailLabel('Game category: ',TransmogSourceLabel(entry.acquisitionType)))
+                    categoryOnly=true
+                end
                 if reveal and type(entry.sourceItems)=='table' and #entry.sourceItems>0 then
                     line(DetailLabel('Linked appearance items: ',tostring(#entry.sourceItems)))
                     for i=1,math.min(#entry.sourceItems,8) do
@@ -2159,20 +2188,34 @@ function UI:BuildCollections(page)
                     line(DetailNote('A linked item is not proof of a vendor or drop location.'))
                 end
             end
+            -- Actual quest choices observed by the player, plus a very small
+            -- independently verified Forever quest reference fallback. Neither
+            -- should become a personal Discovery Registry entry.
+            if AF.GetCollectionQuestRewardReferences then
+                local questRefs=AF:GetCollectionQuestRewardReferences(entry)
+                if type(questRefs)=='table' then
+                    for _,reference in ipairs(questRefs) do
+                        line(DetailLabel('Quest source: ',reference.label or 'Unknown quest'))
+                        line(DetailNote(reference.origin or 'Quest reward reference'))
+                        specific=true
+                    end
+                end
+            end
             -- These are references, not a scan or a personal source record.
             -- Consult the library on EACH detail selection so updated DB tables
             -- can be picked up without changing SavedVariables or the gallery.
-            if reveal and AF.GetCollectionAcquisitionReferences then
+            if knowsSource and AF.GetCollectionAcquisitionReferences then
                 local refs,state=AF:GetCollectionAcquisitionReferences(entry)
                 if type(refs)=='table' and #refs>0 then
                     line(DetailLabel('LibItemDB sources: ',''))
                     for _,row in ipairs(refs) do line('  - '..tostring(row)) end
                     line(DetailNote('Library references - not personally discovered.'))
                     specific=true
-                elseif state and entry.category~='mounts' then
-                    -- Mounts often have no acquisition item mapping; avoid
-                    -- overwhelming their human-facing panel with DB messages.
-                    line(DetailNote('LibItemDB: '..tostring(state)))
+                elseif state and entry.category~='mounts' and not specific and not categoryOnly then
+                    -- A missing optional library row is not evidence that an
+                    -- item is unobtainable. Don't bury a known quest source in
+                    -- the full diagnostic message.
+                    line(DetailNote('LibItemDB has no additional source record for this item.'))
                 end
             end
             if not specific then
@@ -2305,6 +2348,15 @@ function UI:BuildCollections(page)
         modelCards.label:SetText(page.experimentalCardModels and '3D hover: ON' or '3D hover: OFF')
         displayAll.label:SetText(page.allModelCards and '3D all: ON' or '3D all: OFF')
         visibility.label:SetText((s.revealAll and 'Reveal All (spoilers)' or (s.visibility=='collected' and 'Collected Only' or 'My Discoveries'))..'  v')
+        if category=='toys' and AF.ScanCarriedToys then
+            -- Native catalog can be empty even with toys in the player's bags.
+            -- This scan only admits positively identified toy items.
+            local now=type(GetTime)=='function' and GetTime() or 0
+            if not page._toyLastScan or now-page._toyLastScan>20 then
+                page._toyLastScan=now
+                pcall(AF.ScanCarriedToys,AF)
+            end
+        end
         local ok, catalog=pcall(AF.GetCollectionCatalog,AF,category)
         if not ok or type(catalog)~='table' then
             status:SetText('Catalog not available: '..tostring(catalog))
@@ -2344,7 +2396,11 @@ function UI:BuildCollections(page)
             elseif s.visibility=='collected' then
                 emptyMessage:SetText('No collected '..category..' recorded yet.\nTry My Discoveries to review observed but unowned collectibles.')
             else
-                emptyMessage:SetText('No '..category..' discovered yet.\nFoundry will remember the collectibles and vendors you encounter.\nReveal All is optional and exposes undiscovered catalog information.')
+                if category=='toys' then
+                    emptyMessage:SetText('Forever may return an empty Toy Box catalog.\nFoundry also checks toys held in your bags.\nFor a learned toy, try /af toycheck <item ID>.')
+                else
+                    emptyMessage:SetText('No '..category..' discovered yet.\nFoundry will remember the collectibles and vendors you encounter.\nReveal All is optional and exposes undiscovered catalog information.')
+                end
             end
             emptyMessage:Show()
         else
@@ -2414,4 +2470,13 @@ function UI:BuildCollections(page)
         if page.allModelCards then ShowPerfStatus() else status:SetText(baseStatus) end
     end
     page:Refresh()
+    -- If Foundry is opened after a vendor, a previously missed/delayed
+    -- MERCHANT_SHOW should not force the player to press Scan Merchant.
+    page:HookScript('OnShow',function()
+        if MerchantFrame and type(MerchantFrame.IsShown)=='function' and MerchantFrame:IsShown()
+            and AF.CaptureMerchantCollections then
+            local ok,_,_,newCount=pcall(AF.CaptureMerchantCollections,AF)
+            if ok and (tonumber(newCount) or 0)>0 then page:Refresh() end
+        end
+    end)
 end

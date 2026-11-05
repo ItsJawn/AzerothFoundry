@@ -65,6 +65,71 @@ local function NewStock(AF,scope,ownerKey)
     return stock,seen
 end
 
+-- The Add to Crafting Queue dialog's Max button is a CURRENT-CHARACTER
+-- calculation. Account/bank/alt snapshots are planning information, not proof
+-- that an item can be crafted now. Never silently treat stale stock as live.
+-- Returns: integer 0..99, source message; nil means the limit is unknown.
+function AF:GetRecipeQueueMaxAttempts(snapshot,recipe,characterKey)
+    if not snapshot or not recipe or not recipe.id or recipe.learned~=true then
+        return nil,'Select a learned recipe first.'
+    end
+    if characterKey~=self:GetCurrentKey() then
+        return nil,'Max uses the current crafter only. Log onto that character for an accurate material count.'
+    end
+    local recipeID=tonumber(recipe.id)
+    local api=C_TradeSkillUI
+    -- The native game is authoritative when THIS profession is open, not
+    -- merely when cached recipe info is available from a different skill line.
+    if type(api)=='table' and type(api.GetCraftableCount)=='function' and
+        type(api.GetBaseProfessionInfo)=='function' and
+        type(api.GetRecipeInfo)=='function' then
+        local okBase,base=pcall(api.GetBaseProfessionInfo)
+        local professionID=tonumber(snapshot.professionID)
+        if okBase and type(base)=='table' and professionID and
+            (tonumber(base.professionID)==professionID or
+             tonumber(base.parentProfessionID)==professionID) then
+            local okInfo,info=pcall(api.GetRecipeInfo,recipeID)
+            if okInfo and type(info)=='table' and info.learned==true then
+                local okCount,count=pcall(api.GetCraftableCount,recipeID)
+                if okCount and type(count)=='number' and count==count and count>=0 then
+                    return math.max(0,math.min(99,math.floor(count))),
+                        'Native profession limit from currently available reagents (capped at 99).'
+                end
+            end
+        end
+    end
+    -- Works without opening a profession, using the LIVE local bag/reagent
+    -- bag counts. Skip alternative, optional, currency and unknown slots:
+    -- those need native GetCraftableCount for a trustworthy answer.
+    local detail=self:GetRecipeDetails(snapshot,recipe)
+    if type(detail)~='table' or detail.reagentsIncomplete or
+        type(detail.reagents)~='table' or #detail.reagents==0 then
+        return nil,'Recipe reagents are incomplete. Open its profession and try Max again.'
+    end
+    local byID={}
+    for _,r in ipairs(detail.reagents) do
+        local id,needed=tonumber(r.itemID),tonumber(r.quantity)
+        if not id or id<1 or not needed or needed<=0 then
+            return nil,'Recipe reagents are not fully known. Open its profession for native Max.'
+        end
+        byID[id]=(byID[id] or 0)+needed
+    end
+    local getCount=(type(C_Item)=='table' and C_Item.GetItemCount) or GetItemCount
+    if type(getCount)~='function' then
+        return nil,'The client does not expose live bag item counts.'
+    end
+    local maximum=99
+    for itemID,required in pairs(byID) do
+        local ok,count=pcall(getCount,itemID,false)
+        if not ok or type(count)~='number' or count<0 or count~=count then
+            return nil,'Could not read current bag counts. Open the profession for native Max.'
+        end
+        maximum=math.min(maximum,math.floor(count/required))
+    end
+    return math.max(0,maximum),
+        'Calculated from reagents in the current character\'s bags (capped at 99).'
+end
+
 -- Readiness is an informational estimate, not proof of being able to craft.
 -- "In bags" is only used for the currently logged-in character; older
 -- character and bank snapshots are clearly labelled as recorded stock.

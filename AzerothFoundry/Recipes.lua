@@ -140,19 +140,43 @@ function AF:GetRecipeDetails(snapshot, record)
 end
 
 function AF:RecipeSnapshotsForScope(scope, professionFilter, characterFilter, statusFilter, search)
-    local matches = {}
+    local matches, unique, positions = {}, {}, {}
     search = (search or ''):lower()
+    -- Multiple historic profession snapshots can reference the same recipe.
+    -- Avoid duplicated rows, keeping the newest complete and named snapshot.
+    -- No SavedVariables are deleted by this presentation-only cleanup.
+    local function SnapshotRank(snap)
+        local score = (type(snap.professionName)=='string' and
+            snap.professionName:match('%S') and 10000000000 or 0)
+        if type(snap.professionID)=='number' and snap.professionID>0 then
+            score=score+1000000000
+        end
+        return score + math.max(0,tonumber(snap.scanned) or 0)
+    end
     for _, c in ipairs(self:GetWorkshopCharacters(scope or 'all')) do
         if not characterFilter or characterFilter == c.key then
             local byProfession = self.db.recipeSnapshots[c.key] or {}
             for _, snapshot in pairs(byProfession) do
-                if not professionFilter or professionFilter == snapshot.professionID then
+                if type(snapshot)=='table' and
+                    (not professionFilter or professionFilter == snapshot.professionID) then
                     for _, r in pairs(snapshot.recipes or {}) do
-                        if (statusFilter == nil or (statusFilter == 'learned' and r.learned == true)
+                        if type(r)=='table' and r.id and
+                            (statusFilter == nil or (statusFilter == 'learned' and r.learned == true)
                                 or (statusFilter == 'unlearned' and r.learned == false))
                             and (search == '' or (r.name or ''):lower():find(search, 1, true)
                                 or tostring(r.id):find(search, 1, true)) then
-                            matches[#matches+1] = {character=c, snapshot=snapshot, recipe=r}
+                            local k=tostring(c.key)..':'..tostring(r.id)
+                            local candidate={character=c,snapshot=snapshot,recipe=r}
+                            local previous=unique[k]
+                            if not previous or SnapshotRank(snapshot)>SnapshotRank(previous.snapshot) then
+                                unique[k]=candidate
+                                if not positions[k] then
+                                    matches[#matches+1]=candidate
+                                    positions[k]=#matches
+                                else
+                                    matches[positions[k]]=candidate
+                                end
+                            end
                         end
                     end
                 end
@@ -216,12 +240,28 @@ function AF:ScanOpenRecipes(silent)
         if type(id) == 'number' then
             local r = Safe(api.GetRecipeInfo, id)
             if type(r) == 'table' and type(r.name) == 'string' and type(r.learned) == 'boolean' then
-                local row = {id=id, name=r.name, learned=r.learned, icon=r.icon, scanned=Now()}
+                local row = {id=id, name=r.name, learned=r.learned, icon=r.icon, scanned=Now(),
+                    -- Forever's native profession difficulty is authoritative
+                    -- for the *scanning character at scan time*. Never infer
+                    -- a different alt's current skill-up chance from it.
+                    relativeDifficulty=Number(r.relativeDifficulty),
+                    numSkillUps=Number(r.numSkillUps),
+                    canSkillUp=r.canSkillUp,
+                    recipeLink=type(r.hyperlink)=='string' and r.hyperlink or nil}
                 local schematic = Safe(api.GetRecipeSchematic, id, false)
                 if type(schematic) == 'table' then
                     row.outputItemID = Number(schematic.outputItemID)
                     row.reagents, row.reagentsIncomplete = SchematicReagents(schematic)
                     row.quantityMin = Number(schematic.quantityMin)
+                end
+                -- Resolve an item link only if the schematic omitted its
+                -- output; avoid an expensive extra link lookup on every recipe.
+                if not row.outputItemID and type(api.GetRecipeItemLink)=='function' then
+                    local outputLink=Safe(api.GetRecipeItemLink,id)
+                    if type(outputLink)=='string' and outputLink:find('|Hitem:',1,true) then
+                        row.outputItemLink=outputLink
+                        row.outputItemID=tonumber(outputLink:match('item:(%d+)'))
+                    end
                 end
                 byID[id] = row
                 if r.learned then learned=learned+1 else missing=missing+1 end

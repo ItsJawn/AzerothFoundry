@@ -1,4 +1,4 @@
-# Azeroth Foundry — v1.0.0 (Forever)
+# Azeroth Foundry — v1.0.12 (Forever test build)
 
 *Your Adventurer's Journal*
 
@@ -41,14 +41,14 @@ ProfessionDB, ItemDB and QuestDB are optional dependencies. Foundry should load 
 - `/af goals`, `/af notes`, `/af atlas` — journal sections
 - `/af deps`, `/af craftstatus` — dependency and crafting diagnostics
 
-## Release notes — v1.0.0
+## Release notes — v1.0.12 (strict toy discovery validation)
 
-Initial Forever-targeted public package, based on v0.7.5.3, whose theme fixes and recovered-artwork cleanup were verified in Retail. Earlier versions of the Atlas and other features were also tested in the Forever beta. The full v1.0.0 build still needs live Forever testing, particularly crafting, quest updates, Collections data, persistence and any API changes at launch.
+- **Fixed false Toys discoveries:** Ordinary vendor weapons, tools, reagents and other items are no longer treated as toys just because the generic Toy Box info or toy tooltip accepts an item ID.
+- Requires affirmative evidence: a native Toy Box index entry, a `GetToyLink` whose item link matches the item ID, confirmed `PlayerHasToy` ownership, or the confirmed Forever item ID for Shen'dorei Windwell.
+- Previously saved unverified toy observations are **not deleted**. They are hidden from My Discoveries and Reveal All until the game can validate them, at which point the original vendor history reappears automatically.
+- `/af toystatus` reports counts of verified and hidden/unverified saved observations.
+- The previous mount vendor identification improvements remain unchanged. No map, crafting, UI theme, or artwork code was modified for this fix.
 
-This build removes the recovered client BLP texture sheets used by older prototype themes. It retains the custom TGA media and theme-aware Quest Journal and Quest Recap windows from the Retail-tested build.
+## Earlier updates
 
-## Credits and asset notices
-
-OpenMap code/data adaptation: see `OPENMAP_ATTRIBUTION.txt` for attribution and the MIT license notice. Its current source is at https://github.com/openmap-world/openmap . Blizzard names, models, and client-loaded interface artwork belong to Blizzard Entertainment. This package does not bundle recovered Blizzard client BLP sheets.
-
-The initial CurseForge license setting for Azeroth Foundry's original material is All Rights Reserved; third-party material remains under its own terms. The authorship and licensing of included custom TGA artwork should be confirmed before broad redistribution. This file is not a substitute for checking third-party asset rights.
+All previous fixes through v1.0.11 are included. See the CurseForge/GitHub changelog for earlier details. This remains a **TEST build** pending in-game verification.
