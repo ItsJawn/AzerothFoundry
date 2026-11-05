@@ -139,9 +139,89 @@ function AF:GetRecipeDetails(snapshot, record)
     return result
 end
 
+-- Recorded Recipes uses one search for recipe names/IDs and the ingredients
+-- required to make them. Only positively resolved item names are cached;
+-- item names that are still loading are retried after GET_ITEM_INFO_RECEIVED.
+-- This is transient search metadata, never written to SavedVariables.
+local reagentItemNames, requestedReagentNames = {}, {}
+-- Bound uncached item requests per filter refresh so a one-letter search
+-- doesn't queue hundreds of item data loads in the same UI frame.
+local itemRequestBudget = 0
+local reagentReferenceCache = setmetatable({}, {__mode = 'k'})
+
+local function SearchReagentItemName(itemID)
+    itemID = tonumber(itemID)
+    if not itemID or itemID < 1 then return nil end
+    if reagentItemNames[itemID] then return reagentItemNames[itemID] end
+    if not requestedReagentNames[itemID] then
+        if itemRequestBudget <= 0 then return nil end
+        itemRequestBudget = itemRequestBudget - 1
+    end
+    local name
+    local api = C_Item
+    if api and type(api.GetItemNameByID) == 'function' then
+        name = Safe(api.GetItemNameByID, itemID)
+    end
+    if type(name) ~= 'string' or name == '' then
+        local getInfo = (api and api.GetItemInfo) or GetItemInfo
+        name = Safe(getInfo, itemID)
+    end
+    if type(name) == 'string' and name ~= '' then
+        reagentItemNames[itemID] = name:lower()
+        requestedReagentNames[itemID] = nil
+        return reagentItemNames[itemID]
+    end
+    if not requestedReagentNames[itemID] and api
+        and type(api.RequestLoadItemDataByID) == 'function' then
+        requestedReagentNames[itemID] = true
+        pcall(api.RequestLoadItemDataByID, itemID)
+    end
+    return nil
+end
+
+local function HasReagentMatch(reagents, query)
+    if type(reagents) ~= 'table' then return false end
+    for _, reagent in pairs(reagents) do
+        if type(reagent) == 'table' then
+            local id = tonumber(reagent.itemID or reagent.itemId or reagent.id)
+            if id and id > 0 then
+                -- Numerical item-ID lookup also works while the client is
+                -- still loading an item's localized name.
+                if tostring(id):find(query, 1, true) then return true end
+                local name = SearchReagentItemName(id)
+                if name and name:find(query, 1, true) then return true end
+            end
+        end
+    end
+    return false
+end
+
+local function RecipeMatchesSearch(self, snapshot, recipe, query, lookupLib)
+    if (recipe.name or ''):lower():find(query, 1, true)
+        or tostring(recipe.id):find(query, 1, true) then return true end
+    if HasReagentMatch(recipe.reagents, query) then return true end
+    -- Some recipes have no native schematic. Search their optional
+    -- ProfessionDB reagent data as well, but don't query the library over
+    -- and over on every typed character or for every alt with the same row.
+    if recipe.reagents == nil and lookupLib then
+        local cached = reagentReferenceCache[recipe]
+        local professionID = snapshot and snapshot.professionID
+        if not cached or cached.lib ~= lookupLib or cached.professionID ~= professionID then
+            local details = self:GetRecipeDetails(snapshot, recipe)
+            cached = {lib=lookupLib, professionID=professionID,
+                reagents=details and details.reagents}
+            reagentReferenceCache[recipe] = cached
+        end
+        return HasReagentMatch(cached.reagents, query)
+    end
+    return false
+end
+
 function AF:RecipeSnapshotsForScope(scope, professionFilter, characterFilter, statusFilter, search)
     local matches, unique, positions = {}, {}, {}
-    search = (search or ''):lower()
+    search = tostring(search or ''):match('^%s*(.-)%s*$'):lower()
+    local referenceChecked, referenceLib = false, nil
+    itemRequestBudget = search ~= '' and 48 or 0
     -- Multiple historic profession snapshots can reference the same recipe.
     -- Avoid duplicated rows, keeping the newest complete and named snapshot.
     -- No SavedVariables are deleted by this presentation-only cleanup.
@@ -163,18 +243,29 @@ function AF:RecipeSnapshotsForScope(scope, professionFilter, characterFilter, st
                         if type(r)=='table' and r.id and
                             (statusFilter == nil or (statusFilter == 'learned' and r.learned == true)
                                 or (statusFilter == 'unlearned' and r.learned == false))
-                            and (search == '' or (r.name or ''):lower():find(search, 1, true)
-                                or tostring(r.id):find(search, 1, true)) then
-                            local k=tostring(c.key)..':'..tostring(r.id)
-                            local candidate={character=c,snapshot=snapshot,recipe=r}
-                            local previous=unique[k]
-                            if not previous or SnapshotRank(snapshot)>SnapshotRank(previous.snapshot) then
-                                unique[k]=candidate
-                                if not positions[k] then
-                                    matches[#matches+1]=candidate
-                                    positions[k]=#matches
-                                else
-                                    matches[positions[k]]=candidate
+                            then
+                            local found=(search == '')
+                            if not found then
+                                -- The optional library is only consulted for
+                                -- recipes lacking native reagent records.
+                                if r.reagents == nil and not referenceChecked then
+                                    referenceLib=self:GetProfessionReference()
+                                    referenceChecked=true
+                                end
+                                found=RecipeMatchesSearch(self,snapshot,r,search,referenceLib)
+                            end
+                            if found then
+                                local k=tostring(c.key)..':'..tostring(r.id)
+                                local candidate={character=c,snapshot=snapshot,recipe=r}
+                                local previous=unique[k]
+                                if not previous or SnapshotRank(snapshot)>SnapshotRank(previous.snapshot) then
+                                    unique[k]=candidate
+                                    if not positions[k] then
+                                        matches[#matches+1]=candidate
+                                        positions[k]=#matches
+                                    else
+                                        matches[positions[k]]=candidate
+                                    end
                                 end
                             end
                         end

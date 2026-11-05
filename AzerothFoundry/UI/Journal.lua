@@ -231,6 +231,7 @@ function UI:Initialize()
     if frame.SetResizeBounds then frame:SetResizeBounds(1120, 710, 1640, 1040)
     elseif frame.SetMinResize then frame:SetMinResize(1120, 710) end
     frame:SetScale(settings.interfaceScale or 1)
+    frame:SetAlpha(settings.windowOpacity or 1)
     local x, y = tonumber(settings.positionX), tonumber(settings.positionY)
     frame:SetPoint("CENTER", UIParent, "CENTER", x or 0, y or 0)
     local shellTexture=self:Background(frame, self.palette.dark, true)
@@ -617,6 +618,9 @@ function UI:Initialize()
     -- profession the user opened themselves is restored instead.
     -- Do not hook the queue child: crafting results can hide it temporarily.
     frame:HookScript("OnHide",function()
+        -- This is only a temporary visual hide: keep the prepared crafting
+        -- session intact so it doesn't get torn down in combat lockdown.
+        if self._combatAutoHidden then return end
         if AF.IsQueueCompactNativeProfession and AF:IsQueueCompactNativeProfession() then
             if AF.ReleaseQueueNativeProfession then AF:ReleaseQueueNativeProfession() end
         end
@@ -756,8 +760,36 @@ function UI:Refresh()
     self:RefreshNavigation()
 end
 
+-- Apply opacity only to the main journal (including its descendants), never
+-- to the minimap button or separate Blizzard/native profession frames.
+function UI:ApplyWindowOpacity()
+    if self.frame and AF.db and AF.db.settings then
+        self.frame:SetAlpha(AF.db.settings.windowOpacity or 1)
+    end
+end
+
+-- Combat auto-hide changes visibility temporarily and does not write the
+-- player's page selection or normal journal-open preference to SavedVariables.
+function UI:HandleCombatVisibility(enteringCombat)
+    if not self.frame or not AF.db or not AF.db.settings then return end
+    if enteringCombat then
+        if AF.db.settings.autoHideInCombat and self.frame:IsShown() then
+            self._combatAutoHidden=true
+            self.frame:Hide()
+        end
+    elseif self._combatAutoHidden then
+        self._combatAutoHidden=false
+        self.frame:Show()
+        self.frame:Raise()
+    end
+end
+
 function UI:Open(page)
     if not self.frame then return end
+    if AF.db and AF.db.settings and AF.db.settings.autoHideInCombat
+        and type(InCombatLockdown)=="function" and InCombatLockdown() then
+        return -- Don't briefly flash the journal open during combat.
+    end
     if page then self:Switch(page) end
     self.frame:Show()
     self.frame:Raise()
@@ -771,6 +803,7 @@ function UI:Open(page)
 end
 
 function UI:Toggle()
+    if not self.frame then return end
     if self.frame:IsShown() then self.frame:Hide() else self:Open() end
 end
 

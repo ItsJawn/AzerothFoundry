@@ -2,7 +2,7 @@
 ## Title: Azeroth Foundry
 ## Notes: Your Adventurer's Journal for World of Warcraft: Forever.
 ## Author: Azeroth Foundry
-## Version: 1.0.12
+## Version: 1.0.14
 ## SavedVariables: AzerothFoundryDB
 ## OptionalDeps: ProfessionDB, ItemDB, QuestDB
 

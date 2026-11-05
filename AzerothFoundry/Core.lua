@@ -1,7 +1,7 @@
 -- Azeroth Foundry: bootstrap and account-wide data (WoW: Forever / Interface 16001)
 local ADDON_NAME, AF = ...
 AF.name = ADDON_NAME
-AF.version = "1.0.12"
+AF.version = "1.0.14"
 AF.events = CreateFrame("Frame")
 
 local function Print(message)
@@ -48,6 +48,10 @@ function AF:InitializeDatabase()
     if type(db.settings.rememberFoundryPage) ~= "boolean" then db.settings.rememberFoundryPage=true end
     if type(db.settings.devMode) ~= "boolean" then db.settings.devMode=false end
     db.settings.interfaceScale = math.max(.80, math.min(1.15, tonumber(db.settings.interfaceScale) or 1))
+    -- Journal-only presentation controls; default to the existing fully opaque,
+    -- manually controlled window for users upgrading from older versions.
+    db.settings.windowOpacity = math.max(.40, math.min(1, tonumber(db.settings.windowOpacity) or 1))
+    if type(db.settings.autoHideInCombat) ~= "boolean" then db.settings.autoHideInCombat=false end
     -- Display-only migration. Legacy page labels stay valid for slash commands
     -- and hyperlinks; NO character, recipe, project or inventory data is moved.
     if db.settings.page == "Recipes" then
@@ -207,7 +211,10 @@ AF.events:SetScript("OnEvent", function(_, event, ...)
         else
             Print('Journal UI error: '..tostring(uiError)..' (minimap shortcut remains available)')
         end
+    elseif event == "PLAYER_REGEN_DISABLED" then
+        if AF.UI and AF.UI.HandleCombatVisibility then AF.UI:HandleCombatVisibility(true) end
     elseif event == "PLAYER_REGEN_ENABLED" then
+        if AF.UI and AF.UI.HandleCombatVisibility then AF.UI:HandleCombatVisibility(false) end
         if AF._initWorldReady then AF:ScheduleGuideWelcome() end
         if AF.RestoreQueuedNativeProfessionAfterCombat then
             AF:RestoreQueuedNativeProfessionAfterCombat()
@@ -359,6 +366,7 @@ local function RegisterCompatibleEvent(event)
         AF._unsupportedEventRegistrations[#AF._unsupportedEventRegistrations+1]={name=event,error=tostring(err)}
     end
 end
+RegisterCompatibleEvent("PLAYER_REGEN_DISABLED")
 RegisterCompatibleEvent("PLAYER_REGEN_ENABLED")
 RegisterCompatibleEvent("MAP_EXPLORATION_UPDATED")
 RegisterCompatibleEvent("CRITERIA_UPDATE")

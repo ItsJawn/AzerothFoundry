@@ -190,10 +190,18 @@ function UI:BuildSettings(page)
         detail:SetPoint("RIGHT",-10,0)
         return panelRow
     end
-    local function Check(panel,key,title,description,y,callback)
+    local function Check(panel,key,title,description,y,callback,column)
         local row=CreateFrame("Button",nil,panel)
-        row:SetPoint("TOPLEFT",18,y)
-        row:SetPoint("TOPRIGHT",-18,y)
+        if column=="left" then
+            row:SetPoint("TOPLEFT",panel,"TOPLEFT",18,y)
+            row:SetPoint("TOPRIGHT",panel,"TOP",-6,y)
+        elseif column=="right" then
+            row:SetPoint("TOPLEFT",panel,"TOP",6,y)
+            row:SetPoint("TOPRIGHT",panel,"TOPRIGHT",-18,y)
+        else
+            row:SetPoint("TOPLEFT",18,y)
+            row:SetPoint("TOPRIGHT",-18,y)
+        end
         row:SetHeight(51)
         row:RegisterForClicks("LeftButtonUp")
         row.afThemeSurfaceRole="dataRow"
@@ -251,7 +259,7 @@ function UI:BuildSettings(page)
     local navTitle=Text(left,"SETTINGS","GameFontNormalSmall",.73,.62,.47)
     navTitle:SetPoint("TOPLEFT",12,-15)
     Line(left,-41)
-    local navFooter=Text(left,"Azeroth Foundry  /  v"..tostring(AF.version or "1.0.12"),"GameFontHighlightSmall",.70,.66,.61)
+    local navFooter=Text(left,"Azeroth Foundry  /  v"..tostring(AF.version or "1.0.14"),"GameFontHighlightSmall",.70,.66,.61)
     navFooter:SetPoint("BOTTOMLEFT",left,"BOTTOMLEFT",12,15)
     navFooter:SetPoint("BOTTOMRIGHT",left,"BOTTOMRIGHT",-8,15)
     navFooter:SetHeight(20)
@@ -281,10 +289,18 @@ function UI:BuildSettings(page)
         Check(p,"rememberFoundryPage","Remember my last page",
             "Reopen Foundry where you left off instead of always opening Overview.",-108)
         Check(p,"showNavigationTooltips","Navigation tooltips",
-            "Show page names while hovering the compact sidebar.",-165)
+            "Show page names while hovering the sidebar.",-165,nil,"left")
+        Check(p,"autoHideInCombat","Auto-hide in combat",
+            "Hide the journal in combat; restore it afterward.",-165,
+            function(enabled)
+                if enabled and type(InCombatLockdown)=="function" and InCombatLockdown()
+                    and UI.HandleCombatVisibility then UI:HandleCombatVisibility(true) end
+            end,"right")
 
-        local scaleTitle=Text(p,"INTERFACE SCALE","GameFontNormalSmall",.93,.78,.51)
+        local scaleTitle=Text(p,"INTERFACE","GameFontNormalSmall",.93,.78,.51)
         scaleTitle:SetPoint("TOPLEFT",19,-241)
+        local scaleHint=Text(p,"SCALE","GameFontHighlightSmall",.73,.70,.66)
+        scaleHint:SetPoint("TOPLEFT",19,-262)
         local scaleValue=Text(p,"","GameFontHighlightSmall",1,.83,.50)
         scaleValue:SetPoint("TOPLEFT",p,"TOPLEFT",195,-279)
         scaleValue:SetSize(90,30)
@@ -308,6 +324,46 @@ function UI:BuildSettings(page)
         scaleValue:SetHeight(30)
         refreshers[#refreshers+1]=RefreshScale
         RefreshScale()
+
+        local opacityTitle=Text(p,"WINDOW OPACITY","GameFontHighlightSmall",.73,.70,.66)
+        opacityTitle:SetPoint("TOPLEFT",397,-262)
+        local opacitySlider=CreateFrame("Slider",nil,p)
+        opacitySlider:SetOrientation("HORIZONTAL")
+        opacitySlider:SetPoint("TOPLEFT",p,"TOPLEFT",402,-289)
+        opacitySlider:SetSize(213,19)
+        opacitySlider:SetMinMaxValues(.40,1)
+        opacitySlider:SetValueStep(.05)
+        if opacitySlider.SetObeyStepOnDrag then opacitySlider:SetObeyStepOnDrag(true) end
+        opacitySlider:SetThumbTexture("Interface\\Buttons\\UI-SliderBar-Button-Horizontal")
+        local opacityTrack=opacitySlider:CreateTexture(nil,"BACKGROUND")
+        opacityTrack:SetPoint("LEFT",opacitySlider,"LEFT",0,0)
+        opacityTrack:SetPoint("RIGHT",opacitySlider,"RIGHT",0,0)
+        opacityTrack:SetHeight(7)
+        opacityTrack:SetColorTexture(.29,.26,.24,1)
+        local opacityValue=Text(p,"","GameFontHighlightSmall",1,.83,.50)
+        opacityValue:SetPoint("TOPLEFT",p,"TOPLEFT",633,-280)
+        opacityValue:SetSize(65,30)
+        local settingOpacity=false
+        local function RefreshOpacity()
+            local current=settings.windowOpacity or 1
+            opacityValue:SetText(tostring(math.floor(current*100+.5)).."%")
+            settingOpacity=true
+            opacitySlider:SetValue(current)
+            settingOpacity=false
+        end
+        opacitySlider:SetScript("OnValueChanged",function(_,rawValue)
+            if settingOpacity then return end
+            local value=math.max(.40,math.min(1,math.floor(rawValue*20+.5)/20))
+            settings.windowOpacity=value
+            if UI.ApplyWindowOpacity then UI:ApplyWindowOpacity() end
+            opacityValue:SetText(tostring(math.floor(value*100+.5)).."%")
+        end)
+        if UI.RegisterThemeTarget then UI:RegisterThemeTarget(opacityTrack,function(tex,t)
+            local color=t.divider or t.accent
+            tex:SetColorTexture(color[1],color[2],color[3],.72)
+        end) end
+        refreshers[#refreshers+1]=RefreshOpacity
+        RefreshOpacity()
         Line(p,-343)
 
         local introTitle=Text(p,"SELF-FOUND CHARACTER PROMPTS","GameFontNormalSmall",.93,.78,.51)

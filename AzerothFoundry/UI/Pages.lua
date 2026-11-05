@@ -1733,7 +1733,7 @@ function UI:BuildRecipes(page)
         if GameTooltip then GameTooltip:Hide() end
     end
     local searchLabel = Line(center, 49, "small", 23)
-    searchLabel:SetText("Search by name or spell ID")
+    searchLabel:SetText("Search recipe, reagent, or ID")
     local search = self:Input(center, 280)
     search:SetPoint("TOPLEFT", 16, -82)
     search:SetPoint("TOPRIGHT", -17, -82)
