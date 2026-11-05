@@ -18,6 +18,12 @@ function AF:InitializeRecipes()
     if opts.status ~= 'learned' and opts.status ~= 'unlearned' then opts.status = 'learned' end
     if opts.scope ~= 'all' and opts.scope ~= 'expedition' then opts.scope = 'all' end
     opts.showFullCatalog = opts.showFullCatalog == true  -- reserved; never used in v0.3.1 listing
+    -- Crafted-item rarity is independent of a recipe's profession difficulty.
+    -- Keep this as a presentation filter; existing observations are unchanged.
+    local quality = tostring(opts.qualityFilter or 'all')
+    if quality ~= 'all' and quality ~= 'unknown' and
+        not quality:match('^[0-8]$') then quality = 'all' end
+    opts.qualityFilter = quality
     db.schema = math.max(tonumber(db.schema) or 1, 4)
 end
 
@@ -137,6 +143,75 @@ function AF:GetRecipeDetails(snapshot, record)
         end
     end
     return result
+end
+
+-- A crafted item's quality may arrive after the profession snapshot was saved.
+-- Resolve it from the actual output item/link at display time, not from the
+-- recipe's skill-up color or from a guessed Common default. The cache is
+-- session-only: no quality is written into SavedVariables.
+local recipeOutputQualities = {}
+local requestedRecipeOutputItems = {}
+local recipeQualityRequestBudget = 0
+
+function AF:BeginRecipeOutputQualityRefresh()
+    -- Avoid requesting every uncached item in a large account-wide recipe
+    -- list in one frame; cache events will refresh remaining rows.
+    recipeQualityRequestBudget = 40
+end
+
+function AF:GetRecordedRecipeOutputQuality(snapshot, recipe)
+    if type(recipe) ~= 'table' then return nil end
+    local itemID = tonumber(recipe.outputItemID)
+    local link = recipe.outputItemLink
+    if not itemID and type(link) == 'string' then
+        itemID = tonumber(link:match('item:(%d+)'))
+    end
+    if not itemID or itemID < 1 then return nil end
+    local cached = recipeOutputQualities[itemID]
+    if cached ~= nil then return cached end
+
+    local quality
+    local api = C_Item
+    if type(link) == 'string' and link ~= '' then
+        local getInfo = (api and api.GetItemInfo) or GetItemInfo
+        if type(getInfo) == 'function' then
+            local ok, _, _, q = pcall(getInfo, link)
+            if ok then quality = q end
+        end
+    end
+    if quality == nil and api and type(api.GetItemQualityByID) == 'function' then
+        local ok, q = pcall(api.GetItemQualityByID, itemID)
+        if ok then quality = q end
+    end
+    if quality == nil then
+        local getInfo = (api and api.GetItemInfo) or GetItemInfo
+        if type(getInfo) == 'function' then
+            local ok, _, _, q = pcall(getInfo, itemID)
+            if ok then quality = q end
+        end
+    end
+    quality = tonumber(quality)
+    if quality and quality >= 0 and quality <= 8 then
+        recipeOutputQualities[itemID] = quality
+        requestedRecipeOutputItems[itemID] = nil
+        return quality
+    end
+    if recipeQualityRequestBudget > 0 and not requestedRecipeOutputItems[itemID]
+        and api and type(api.RequestLoadItemDataByID) == 'function' then
+        recipeQualityRequestBudget = recipeQualityRequestBudget - 1
+        requestedRecipeOutputItems[itemID] = true
+        pcall(api.RequestLoadItemDataByID, itemID)
+    end
+    return nil
+end
+
+-- Used by the Recorded Recipes filter.  An unresolved item is not a
+-- Common-quality item: its quality is unknown until the client resolves it.
+function AF:RecipeMatchesOutputQualityFilter(filter, quality)
+    filter = tostring(filter or 'all')
+    return filter == 'all'
+        or (filter == 'unknown' and quality == nil)
+        or (tonumber(filter) ~= nil and quality == tonumber(filter))
 end
 
 -- Recorded Recipes uses one search for recipe names/IDs and the ingredients

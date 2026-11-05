@@ -425,7 +425,13 @@ function T:Attach(page,viewport,canvas,right,UI,palette)
             return
         end
         self.debugTerrainManifest=data
-        local raw=page.afMapDebug and page.afMapDebug.unmasked==true
+        local cityWithoutMasks=#data.masks==0 and AF.IsAtlasCityMap
+            and AF:IsAtlasCityMap(self.mapID) and #data.tiles>0
+        -- Capital-city map art is normally fully revealed; unlike quest zones,
+        -- the city can show its indexed ground tiles without Explorer masks.
+        -- This is deliberately restricted to verified city maps, NEVER a
+        -- blanket fallback for unexplored zones, dungeons, or interiors.
+        local raw=(page.afMapDebug and page.afMapDebug.unmasked==true) or cityWithoutMasks
         if #data.masks==0 and not raw then
             HideAll();stats.reason=data.maskStatus or 'No explored-area masks';return
         end
@@ -522,7 +528,8 @@ function T:Attach(page,viewport,canvas,right,UI,palette)
         if clipped>0 then
             stats.reason='Tile budget reached ('..clipped..' pieces deferred)'
         else
-            stats.reason=displayed>0 and (raw and 'DEBUG: unmasked raw terrain' or 'Real masked minimap terrain') or
+            stats.reason=displayed>0 and (cityWithoutMasks and 'City ground minimap terrain'
+                or raw and 'DEBUG: unmasked raw terrain' or 'Real masked minimap terrain') or
                 (found==0 and 'No indexed terrain in view' or 'No explored terrain in view')
         end
         local ended=clock()

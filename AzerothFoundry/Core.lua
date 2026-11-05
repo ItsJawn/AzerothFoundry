@@ -1,7 +1,7 @@
 -- Azeroth Foundry: bootstrap and account-wide data (WoW: Forever / Interface 16001)
 local ADDON_NAME, AF = ...
 AF.name = ADDON_NAME
-AF.version = "1.0.14"
+AF.version = "1.0.17"
 AF.events = CreateFrame("Frame")
 
 local function Print(message)
@@ -561,7 +561,7 @@ SlashCmdList.AZEROTHFOUNDRY = function(arg)
         Print(AF:QuestReferenceStatus())
         return
     elseif command == "help" then
-        Print("/af - journal, /af guide, /af theme, /af initiation, /af initiationpreview, /af settings, /af deps, /af atlas, /af recap, /af goals (or projects), /af workshop, /af recipes, /af queue, /af materials, /af notes, /af gatherdebug, /af gatherstatus, /af craftstatus, /af toycheck <itemID>, /af toystatus, /af discoverystatus, /af discoveryscan, /af recipescan, /af bags, /af scan, /af minimap, /af testtoast, /af testmilestonetoast, /af testcomplete, /af tracker.")
+        Print("/af - journal, /af guide, /af theme, /af initiation, /af initiationpreview, /af settings, /af deps, /af atlas, /af navstatus, /af recap, /af goals (or projects), /af workshop, /af recipes, /af queue, /af materials, /af notes, /af gatherdebug, /af gatherstatus, /af craftstatus, /af toycheck <itemID>, /af toystatus, /af discoverystatus, /af discoveryscan, /af recipescan, /af bags, /af scan, /af minimap, /af testtoast, /af testmilestonetoast, /af testcomplete, /af tracker.")
     elseif command == 'mapdebug' then
         local page=AF.UI and AF.UI.pageViews and AF.UI.pageViews.Exploration
         if page and page.ToggleMapDebug then
@@ -575,6 +575,20 @@ SlashCmdList.AZEROTHFOUNDRY = function(arg)
         local page=AF.UI and AF.UI.pageViews and AF.UI.pageViews.Exploration
         if page and page.PrintMapDebug then page:PrintMapDebug()
         else Print('Open Exploration first to use /af mapreport.') end
+        return
+    elseif command == 'navstatus' then
+        local cityID,cityName=AF.GetAtlasCityMap and AF:GetAtlasCityMap()
+        local nav=AF.AtlasCityNavigation
+        local saved=nav and cityID and nav:GetSavedDestinations(cityID) or {}
+        local live=nav and cityID and nav:GetLiveOptions(cityID) or {}
+        local dest=nav and nav.currentDestination
+        Print('City: '..tostring(cityName or 'not detected')..' | map '..tostring(cityID)
+            ..' | guard choices '..#live..' | saved waypoints '..#saved)
+        Print('Current pin: '..tostring(dest and dest.name or 'none')
+            ..' | map '..tostring(dest and dest.mapID or 'none'))
+        Print('Native waypoint: '..tostring(nav and nav.nativeWaypointStatus or 'none')
+            ..' | minimap arrow: '..tostring(nav and nav.minimapArrow and nav.minimapArrow:IsShown() or false)
+            ..' | distance: '..tostring(nav and nav.lastMinimapDistance or 'unknown'))
         return
     elseif command == 'atlasdebug' then
         local page=AF.UI and AF.UI.pageViews and AF.UI.pageViews.Exploration

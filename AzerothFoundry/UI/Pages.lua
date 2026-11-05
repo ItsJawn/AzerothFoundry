@@ -1738,11 +1738,72 @@ function UI:BuildRecipes(page)
     search:SetPoint("TOPLEFT", 16, -82)
     search:SetPoint("TOPRIGHT", -17, -82)
     search:SetHeight(27)
-    local countLabel = Line(center, 120, "small", 35)
+    -- Compact crafted-item rarity filter, directly beneath the shared
+    -- recipe/reagent search. No separate search mode or SavedVariables format.
+    local qualityOptions = {
+        {'all','All qualities'}, {'0','Poor'}, {'1','Common'},
+        {'2','Uncommon'}, {'3','Rare'}, {'4','Epic'},
+        {'5','Legendary'}, {'6','Artifact'}, {'7','Heirloom'},
+        {'8','WoW Token'}, {'unknown','Unknown'},
+    }
+    local qualityNames = {}
+    for _, entry in ipairs(qualityOptions) do qualityNames[entry[1]] = entry[2] end
+    local qualityColors = {
+        [0]={.62,.62,.62}, [1]={1,1,1}, [2]={.12,1,0},
+        [3]={0,.44,.87}, [4]={.64,.21,.93}, [5]={1,.50,0},
+        [6]={.90,.80,.50}, [7]={0,.80,1}, [8]={0,.80,1},
+    }
+    local qualityButton = UI.WorkshopButton(center, 'Rarity: All qualities  v', nil)
+    qualityButton:SetPoint('TOPLEFT',center,'TOPLEFT',16,-117)
+    qualityButton:SetPoint('TOPRIGHT',center,'TOPRIGHT',-17,-117)
+    qualityButton:SetHeight(24)
+    local qualityMenu = CreateFrame('Frame',nil,page)
+    self:Background(qualityMenu,P.leather,true)
+    qualityMenu:SetFrameStrata('DIALOG')
+    qualityMenu:SetFrameLevel(math.max(38,(page:GetFrameLevel() or 1)+30))
+    qualityMenu:EnableMouse(true)
+    qualityMenu:Hide()
+    local qualityRows={}
+    for i, option in ipairs(qualityOptions) do
+        local key,label=option[1],option[2]
+        local row=UI.WorkshopButton(qualityMenu,label,function()
+            qualityMenu:Hide()
+            AF.db.settings.recipes.qualityFilter=key
+            UI.recipeSelectedID=nil
+            page:Refresh()
+        end)
+        row:SetHeight(23)
+        row:SetPoint('TOPLEFT',qualityMenu,'TOPLEFT',5,-5-(i-1)*24)
+        row:SetPoint('TOPRIGHT',qualityMenu,'TOPRIGHT',-5,-5-(i-1)*24)
+        if tonumber(key) then
+            local marker=row:CreateTexture(nil,'OVERLAY')
+            marker:SetColorTexture(unpack(qualityColors[tonumber(key)]))
+            marker:SetPoint('LEFT',row,'LEFT',5,0)
+            marker:SetSize(4,15)
+            row.label:ClearAllPoints()
+            row.label:SetPoint('TOPLEFT',row,'TOPLEFT',14,-1)
+            row.label:SetPoint('BOTTOMRIGHT',row,'BOTTOMRIGHT',-6,1)
+        end
+        qualityRows[#qualityRows+1]={button=row,key=key}
+    end
+    qualityButton:SetScript('OnClick',function()
+        if qualityMenu:IsShown() then qualityMenu:Hide();return end
+        qualityMenu:ClearAllPoints()
+        qualityMenu:SetPoint('TOPLEFT',qualityButton,'BOTTOMLEFT',0,-2)
+        qualityMenu:SetWidth(math.max(165,qualityButton:GetWidth() or 165))
+        qualityMenu:SetHeight(10+#qualityOptions*24)
+        local active=AF.db.settings.recipes.qualityFilter or 'all'
+        for _,option in ipairs(qualityRows) do
+            UI.WorkshopSetSelected(option.button,option.key==active)
+        end
+        qualityMenu:Show()
+    end)
+    page:HookScript('OnHide',function() qualityMenu:Hide() end)
+    local countLabel = Line(center, 151, "small", 35)
     countLabel:SetJustifyV("TOP")
     local list = self:List(center, 52)
     UI:InsetWorkshopScrollBar(list)
-    list:SetPoint("TOPLEFT", 13, -167)
+    list:SetPoint("TOPLEFT", 13, -194)
     list:SetPoint("BOTTOMRIGHT", -30, 88)
     local centerHelp = self:Text(center, "small", P.ink)
     centerHelp:SetPoint("BOTTOMLEFT", 17, 15)
@@ -1979,7 +2040,10 @@ function UI:BuildRecipes(page)
         closeCharacterMenu()
         if not AF.db or not AF.db.settings.recipes then return end
         refreshFilterPlacement()
+        qualityMenu:Hide()
         local opts=AF.db.settings.recipes
+        local rarity=opts.qualityFilter or 'all'
+        qualityButton.label:SetText('Rarity: '..(qualityNames[rarity] or 'All qualities')..'  v')
         UI.WorkshopSetSelected(learnedButton, opts.status=='learned')
         UI.WorkshopSetSelected(unlearnedButton, opts.status=='unlearned')
         UI.WorkshopSetSelected(allButton, opts.scope=='all')
@@ -2000,9 +2064,18 @@ function UI:BuildRecipes(page)
             UI.recipeSelectedID=nil
             page:Refresh()
         end, UI.recipeProfessionFilter)
-        local matches=AF:RecipeSnapshotsForScope(opts.scope,
+        local unfiltered=AF:RecipeSnapshotsForScope(opts.scope,
             UI.recipeProfessionFilter~=0 and UI.recipeProfessionFilter or nil,
             UI.recipeCharacterFilter, opts.status, search:GetText())
+        local matches={}
+        AF:BeginRecipeOutputQualityRefresh()
+        for _,match in ipairs(unfiltered) do
+            local outputQuality=AF:GetRecordedRecipeOutputQuality(match.snapshot,match.recipe)
+            if AF:RecipeMatchesOutputQualityFilter(rarity,outputQuality) then
+                match.outputQuality=outputQuality
+                matches[#matches+1]=match
+            end
+        end
         local entries={}
         for _,item in ipairs(matches) do
             local suffix=''
@@ -2015,7 +2088,7 @@ function UI:BuildRecipes(page)
             end
             entries[#entries+1]={key=item.character.key..':'..item.recipe.id,
                 label=item.recipe.name..suffix..'\n'..item.character.name..'  •  '..item.snapshot.professionName,
-                icon=item.recipe.icon, item=item}
+                icon=item.recipe.icon, item=item, outputQuality=item.outputQuality}
         end
         local selectedKey = UI.recipeSelectedID and UI.recipeSelectedCharacter
             and (UI.recipeSelectedCharacter..':'..UI.recipeSelectedID) or nil
@@ -2025,6 +2098,30 @@ function UI:BuildRecipes(page)
         for i,entry in ipairs(entries) do
             local button=list.rows[i]
             if button then
+                -- Tiny vertical rarity strip on the left of the recipe icon.
+                -- Missing item quality is intentionally unmarked, not Common.
+                if not button.afRecipeQualityStrip then
+                    local backing=button:CreateTexture(nil,'ARTWORK')
+                    backing:SetColorTexture(0,0,0,.48)
+                    backing:SetPoint('TOPLEFT',button,'TOPLEFT',2,-5)
+                    backing:SetPoint('BOTTOMLEFT',button,'BOTTOMLEFT',2,5)
+                    backing:SetWidth(6)
+                    local strip=button:CreateTexture(nil,'OVERLAY')
+                    strip:SetPoint('TOPLEFT',button,'TOPLEFT',3,-6)
+                    strip:SetPoint('BOTTOMLEFT',button,'BOTTOMLEFT',3,6)
+                    strip:SetWidth(4)
+                    button.afRecipeQualityBacking=backing
+                    button.afRecipeQualityStrip=strip
+                end
+                local rarityColor=qualityColors[entry.outputQuality]
+                if rarityColor then
+                    button.afRecipeQualityStrip:SetColorTexture(unpack(rarityColor))
+                    button.afRecipeQualityStrip:Show()
+                    button.afRecipeQualityBacking:Show()
+                else
+                    button.afRecipeQualityStrip:Hide()
+                    button.afRecipeQualityBacking:Hide()
+                end
                 local indicator,color=SkillIndicator(entry.item.recipe)
                 if not button.afRecipeSkillArrow then
                     -- Make a small arrow out of 3 native color textures.

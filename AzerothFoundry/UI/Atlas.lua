@@ -144,6 +144,19 @@ function UI:BuildAtlas(page)
     rightText:SetPoint('TOPLEFT',right,'TOPLEFT',13,-174)
     rightText:SetPoint('BOTTOMRIGHT',right,'BOTTOMRIGHT',-13,273)
     rightText:SetJustifyV('TOP')
+    -- Guard-style city navigation occupies the Selected Region space ONLY
+    -- while the player is physically in a recognized city. In all other
+    -- regions the normal journal remains unchanged.
+    local cityHint=self:Text(right,'small',pal.ink)
+    cityHint:SetPoint('TOPLEFT',right,'TOPLEFT',13,-169)
+    cityHint:SetPoint('TOPRIGHT',right,'TOPRIGHT',-13,-169)
+    cityHint:SetHeight(43)
+    cityHint:SetJustifyV('TOP')
+    cityHint:Hide()
+    local cityList=self:List(right,28)
+    cityList:SetPoint('TOPLEFT',right,'TOPLEFT',12,-211)
+    cityList:SetPoint('BOTTOMRIGHT',right,'BOTTOMRIGHT',-25,273)
+    cityList:Hide()
     local goalTitle=self:SectionTitle(right,'Exploration Goals')
     goalTitle:SetPoint('BOTTOMLEFT',right,'BOTTOMLEFT',12,230)
     goalTitle:SetPoint('BOTTOMRIGHT',right,'BOTTOMRIGHT',-12,230)
@@ -204,6 +217,25 @@ function UI:BuildAtlas(page)
     under:SetAllPoints(viewport);under:SetColorTexture(0.12,0.10,0.065,1)
     local mapCanvas=CreateFrame('Frame',nil,viewport)
     mapCanvas:SetSize(10,10);mapCanvas:SetPoint('CENTER',viewport,'CENTER')
+    local cityMarker=CreateFrame('Button',nil,mapCanvas)
+    cityMarker:SetSize(17,21)
+    cityMarker:Hide()
+    local pinPole=cityMarker:CreateTexture(nil,'OVERLAY')
+    pinPole:SetColorTexture(.25,.13,.08,1)
+    pinPole:SetPoint('TOPLEFT',cityMarker,'TOPLEFT',4,-3)
+    pinPole:SetSize(2,18)
+    local pinFlag=cityMarker:CreateTexture(nil,'OVERLAY')
+    pinFlag:SetColorTexture(.94,.19,.14,1)
+    pinFlag:SetPoint('TOPLEFT',cityMarker,'TOPLEFT',5,-2)
+    pinFlag:SetSize(11,9)
+    cityMarker:SetScript('OnEnter',function(btn)
+        if not GameTooltip then return end
+        GameTooltip:SetOwner(btn,'ANCHOR_RIGHT')
+        GameTooltip:SetText(btn.afCityName or 'City destination')
+        GameTooltip:AddLine('Guard navigation destination',.87,.73,.45)
+        GameTooltip:Show()
+    end)
+    cityMarker:SetScript('OnLeave',function() if GameTooltip then GameTooltip:Hide() end end)
     local mapTiles={}
     local playerArrow=mapCanvas:CreateTexture(nil,'OVERLAY')
     playerArrow:SetTexture('Interface\\Minimap\\MinimapArrow')
@@ -474,6 +506,81 @@ function UI:BuildAtlas(page)
         if page.layer then page:RepositionTiles() end
     end)
 
+    local function MapPositionForDestination(point)
+        if not point or type(point.x)~='number' or type(point.y)~='number' then return end
+        if point.mapID==page.mapID then return point.x,point.y end
+        if not (C_Map and type(C_Map.GetWorldPosFromMapPos)=='function'
+            and type(C_Map.GetMapPosFromWorldPos)=='function' and type(CreateVector2D)=='function') then return end
+        local ok,continent,world=pcall(C_Map.GetWorldPosFromMapPos,point.mapID,CreateVector2D(point.x,point.y))
+        if not ok or type(continent)~='number' or not world then return end
+        local good,mapID,pos=pcall(C_Map.GetMapPosFromWorldPos,continent,world,page.mapID)
+        if good and mapID==page.mapID and pos then
+            local valid,x,y=pcall(function() return pos:GetXY() end)
+            if not valid and type(pos)=='table' then x,y=pos.x,pos.y end
+            if type(x)=='number' and type(y)=='number' and x>=0 and x<=1 and y>=0 and y<=1 then
+                return x,y
+            end
+        end
+    end
+    local function PositionCityMarker()
+        local cityID=AF:GetAtlasCityMap()
+        local manager=AF.AtlasCityNavigation
+        local point=manager and manager.currentDestination
+        if not cityID or not point or not page.layer then cityMarker:Hide();return end
+        local x,y=MapPositionForDestination(point)
+        if not x then cityMarker:Hide();return end
+        cityMarker.afCityName=point.name
+        cityMarker:ClearAllPoints()
+        cityMarker:SetPoint('BOTTOMLEFT',mapCanvas,'TOPLEFT',x*mapCanvas:GetWidth()-4,-y*mapCanvas:GetHeight())
+        cityMarker:Show()
+    end
+    cityMarker:SetScript('OnClick',function()
+        local manager=AF.AtlasCityNavigation
+        if manager and manager.currentDestination then manager:SelectDestination(manager.currentDestination) end
+    end)
+    local repositionBeforeCity=page.RepositionTiles
+    page.RepositionTiles=function(self)
+        repositionBeforeCity(self)
+        PositionCityMarker()
+    end
+    function page:RefreshCityNavigation()
+        local cityID,cityName=AF:GetAtlasCityMap()
+        local active=cityID~=nil
+        recordTitle:SetText(active and 'Navigation' or 'Selected Region')
+        rightText:SetShown(not active)
+        cityHint:SetShown(active)
+        cityList:SetShown(active)
+        if not active then cityMarker:Hide();return end
+        local manager=AF.AtlasCityNavigation
+        local options=manager and manager:GetLiveOptions(cityID) or {}
+        local saved=manager and manager:GetSavedDestinations(cityID) or {}
+        local entries={}
+        for _,option in ipairs(options) do
+            entries[#entries+1]={key='guard:'..option.id,label=option.name,
+                kind='gossip',option=option}
+        end
+        for _,dest in ipairs(saved) do
+            entries[#entries+1]={key='saved:'..dest.key,label=dest.name,
+                kind='destination',point=dest}
+        end
+        if #options>0 then
+            cityHint:SetText(cityName..' | Guard directions available')
+        elseif #saved>0 then
+            cityHint:SetText(cityName..' | Previously marked destinations')
+        else
+            cityHint:SetText(cityName..'\nAsk a city guard for directions to learn destinations.')
+        end
+        UI:FillList(cityList,entries,function(entry)
+            if entry.kind=='gossip' then
+                if manager then manager:SelectOption(entry.option) end
+            elseif entry.point and manager then
+                manager:SelectDestination(entry.point)
+                if page.mapID~=cityID then page:Navigate(cityID) end
+                PositionCityMarker()
+            end
+        end)
+        PositionCityMarker()
+    end
     function page:Refresh()
         local settings=AF.db.settings.atlas
         local id=self.mapID or settings.mapID or AF:GetAtlasDefaultMap()
@@ -529,8 +636,17 @@ function UI:BuildAtlas(page)
             recordLines[#recordLines+1]='No local visit history yet'
         end
         rightText:SetText(table.concat(recordLines,'\n'))
+        self:RefreshCityNavigation()
     end
     page:Refresh()
+    UI.atlasCityPage=page
+    -- Opening Atlas while physically in a city should show its local map,
+    -- not leave the user on an old continent page from another session.
+    page:HookScript('OnShow',function(self)
+        local cityID=AF:GetAtlasCityMap()
+        if cityID and self.mapID~=cityID then self:Navigate(cityID)
+        else self:RefreshCityNavigation() end
+    end)
     -- Refresh the Explorer bar on actual client discovery/achievement changes;
     -- never poll or recalculate exploration from revealed map textures.
     local explorationWatcher=CreateFrame('Frame',nil,page)

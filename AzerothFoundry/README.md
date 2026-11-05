@@ -1,4 +1,4 @@
-# Azeroth Foundry — v1.0.14 (Forever test build)
+# Azeroth Foundry — v1.0.17 (Forever test build)
 
 *Your Adventurer's Journal*
 
@@ -39,7 +39,33 @@ ProfessionDB, ItemDB and QuestDB are optional dependencies. Foundry should load 
 - `/af theme` — theme settings
 - `/af recipes`, `/af queue`, `/af materials` — Workshop
 - `/af goals`, `/af notes`, `/af atlas` — journal sections
+- `/af navstatus` — city guard navigation diagnostics
 - `/af deps`, `/af craftstatus` — dependency and crafting diagnostics
+
+## Release notes — v1.0.17 (recorded recipe rarity)
+
+- Recorded Recipes now shows a thin color bar beside each recipe icon indicating the **crafted item's quality**, separately from profession skill-up chance.
+- A compact **Rarity** dropdown below the existing search field filters Poor, Common, Uncommon, Rare, Epic, Legendary, Artifact, Heirloom, WoW Token, and Unknown quality (plus All).
+- Filtering respects the existing recipe/reagent search, character, profession, learned status, and Expedition scope.
+- Unknown or asynchronously loading output quality is never guessed as Common. Quality lookup is rate-limited and refreshed when item data loads.
+- The recipe database and crafting logic are unchanged.
+
+## Earlier update — v1.0.16 (city waypoint tracking)
+
+- Selecting a saved city destination now enables native user-waypoint supertracking when Forever accepts the map point.
+- A small directional arrow appears on the actual minimap for an active city destination, including guard POIs. It follows facing when rotate-minimap is enabled and hides outside the city or near the destination.
+- `/af navstatus` now reports whether the native waypoint was set and whether the minimap arrow is visible.
+- No new artwork, dependencies, or global CVars. Native in-world markers are still governed by client settings.
+
+## Earlier experimental features — v1.0.15 (city navigation / terrain experiment)
+
+- **City Navigation (experimental):** While physically inside a city recognized by Forever's map APIs, the Atlas' Selected Region section becomes Navigation. It shows the active guard's available dialogue choices when talking to a guard, plus destination coordinates previously marked by a guard while Foundry was running.
+- Selecting a guard option uses the actual guard dialogue. When the client creates a guard direction pin, Foundry remembers the POI and can reselect it later. Selecting a saved destination places a pin on Foundry's map and attempts to use Blizzard's user-waypoint API if permitted.
+- This is *not* a full offline city directory yet. Visit and interact with a guard to capture destinations; map API cannot query guard menus when you aren't talking to them. Only positively reported map coordinates are persisted.
+- **City terrain fallback (experimental):** Where a validated city map projects into already indexed mainland minimap tiles but provides no exploration masks, display those minimap tiles instead of suppressing all terrain. No guesswork and no changes to outdoor exploration masking.
+- **Interiors and dungeons:** Continue to use their supported native map art. Individual interior/instance terrain datasets and multi-floor alignment still need verification; no universal interior terrain claim.
+- `/af navstatus` reports the detected city, live guard choices, known destinations, and current marker.
+- Tested with static validation and mocked city guards; **in-game city navigation, native waypoint behavior and city ground-layer alignment are not yet confirmed**. Keep v1.0.14 as the public release until verified.
 
 ## Release notes — v1.0.14 (interface settings)
 
