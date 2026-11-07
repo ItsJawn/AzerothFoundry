@@ -375,10 +375,17 @@ function UI:BuildWorkshop(page)
         end
     end
     training:HookScript('OnSizeChanged',layoutCompactTraining)
+    local function scanSelectedProfession(key,name)
+        if AF.PrepareWorkshopProfessionForScan then
+            local ok,msg=AF:PrepareWorkshopProfessionForScan(name,key)
+            if not ok and AF.Print then AF.Print(msg) end
+        end
+    end
     local previousSelection
     local function choose(key,prof)
         UI.workshopSelectedCharacter=key
         UI.workshopSelectedProfession=prof
+        if key and prof then scanSelectedProfession(key,prof) end
         page:Refresh()
     end
     goalInput:SetScript('OnEnterPressed',function(self)
@@ -476,6 +483,18 @@ function UI:BuildWorkshop(page)
             UI:FillList(dirList,directoryRows,function(entry)
                 UI.workshopSelectedProfession=entry.key
                 UI.workshopSelectedCharacter=nil
+                -- In profession-first view, prefer the current character if
+                -- this profession is learned there; offline alts stay browse-only.
+                for _,crafter in ipairs((function()
+                    for _,g in ipairs(groups) do if g.name==entry.key then return g.characters end end
+                    return {}
+                end)()) do
+                    if crafter.character.key==AF:GetCurrentKey() then
+                        UI.workshopSelectedCharacter=crafter.character.key
+                        scanSelectedProfession(crafter.character.key,entry.key)
+                        break
+                    end
+                end
                 page:Refresh()
             end,chosenProf)
         else

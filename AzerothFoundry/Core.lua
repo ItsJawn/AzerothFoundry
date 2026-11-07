@@ -1,7 +1,7 @@
 -- Azeroth Foundry: bootstrap and account-wide data (WoW: Forever / Interface 16001)
 local ADDON_NAME, AF = ...
 AF.name = ADDON_NAME
-AF.version = "1.0.27"
+AF.version = "1.0.28"
 AF.events = CreateFrame("Frame")
 
 local function Print(message)
@@ -253,6 +253,7 @@ AF.events:SetScript("OnEvent", function(_, event, ...)
             if AF.SyncGuidedGoals then AF:SyncGuidedGoals(true) end
             if AF.SyncExplorationGoals then AF:SyncExplorationGoals(false) end
             if AF.UI and AF.UI.RefreshGoalTracker then AF.UI:RefreshGoalTracker() end
+            if event=="TRADE_SKILL_SHOW" and AF.ScheduleRecipeScan then AF:ScheduleRecipeScan() end
             AF:RefreshUI()
         end
     elseif event == "ENCOUNTER_END" or event == "BOSS_KILL" then
@@ -317,7 +318,7 @@ AF.events:SetScript("OnEvent", function(_, event, ...)
     elseif event == "BANKFRAME_CLOSED" then
         if AF.bankOpen and AF.ScanBank then AF:ScanBank() end
         AF.bankOpen=false
-    elseif event == "TRADE_SKILL_LIST_UPDATE" or event == "NEW_RECIPE_LEARNED" then
+    elseif event == "TRADE_SKILL_DATA_SOURCE_CHANGED" or event == "TRADE_SKILL_LIST_UPDATE" or event == "NEW_RECIPE_LEARNED" then
         if AF.db and AF.ScheduleRecipeScan then AF:ScheduleRecipeScan() end
     elseif event == "GET_ITEM_INFO_RECEIVED" then
         if AF.UI and AF.UI.OnQuestItemInfoReceived then AF.UI:OnQuestItemInfoReceived(...) end
@@ -378,6 +379,7 @@ RegisterCompatibleEvent("PLAYER_LEVEL_UP")
 RegisterCompatibleEvent("SKILL_LINES_CHANGED")
 RegisterCompatibleEvent("TRADE_SKILL_SHOW")
 RegisterCompatibleEvent("TRADE_SKILL_LIST_UPDATE")
+RegisterCompatibleEvent("TRADE_SKILL_DATA_SOURCE_CHANGED")
 RegisterCompatibleEvent("NEW_RECIPE_LEARNED")
 RegisterCompatibleEvent("PLAYER_LOGOUT")
 RegisterCompatibleEvent("QUEST_DETAIL")

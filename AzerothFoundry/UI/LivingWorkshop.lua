@@ -319,11 +319,11 @@ function UI:BuildWorkshopQueue(page)
     local details=self:List(detail,43)
     UI:InsetWorkshopScrollBar(details)
     details:SetPoint('TOPLEFT',stepsLabel,'BOTTOMLEFT',-5,-9)
-    details:SetPoint('BOTTOMRIGHT',detail,'BOTTOMRIGHT',-30,346)
+    details:SetPoint('BOTTOMRIGHT',detail,'BOTTOMRIGHT',-30,376)
     local statusPanel=UI:NewFrame('Frame',detail)
     statusPanel:SetPoint('BOTTOMLEFT',detail,'BOTTOMLEFT',14,20)
     statusPanel:SetPoint('BOTTOMRIGHT',detail,'BOTTOMRIGHT',-14,20)
-    statusPanel:SetHeight(310)
+    statusPanel:SetHeight(340)
     UI:Background(statusPanel,P.leather,true)
     local panelHeading=UI:Text(statusPanel,'small',P.gold)
     panelHeading:SetPoint('TOPLEFT',statusPanel,'TOPLEFT',12,-8)
@@ -331,14 +331,58 @@ function UI:BuildWorkshopQueue(page)
     panelHeading:SetHeight(20)
     local readiness=UI:Text(statusPanel,'small',P.pale)
     readiness:SetPoint('TOPLEFT',statusPanel,'TOPLEFT',12,-34)
-    readiness:SetPoint('BOTTOMRIGHT',statusPanel,'BOTTOMRIGHT',-12,163)
+    readiness:SetPoint('BOTTOMRIGHT',statusPanel,'BOTTOMRIGHT',-12,190)
     readiness:SetJustifyV('TOP')
     local footer=UI:Text(statusPanel,'small',P.pale)
-    footer:SetPoint('BOTTOMLEFT',statusPanel,'BOTTOMLEFT',12,130)
-    footer:SetPoint('BOTTOMRIGHT',statusPanel,'BOTTOMRIGHT',-12,130)
+    footer:SetPoint('BOTTOMLEFT',statusPanel,'BOTTOMLEFT',12,150)
+    footer:SetPoint('BOTTOMRIGHT',statusPanel,'BOTTOMRIGHT',-12,150)
     footer:SetHeight(24)
     footer:SetJustifyV('TOP')
-    footer:SetText('Craft directly from Foundry. Open Profession shows Blizzard’s window when needed; only observed results count.')
+    footer:SetText('Craft timing appears here when the game starts a profession cast.')
+    -- Live craft cast progress is read from UnitCastingInfo("player"); no
+    -- inferred duration or premature queue credit. Parent OnUpdate runs only
+    -- while the Crafting Queue page is visible.
+    local castTrack=CreateFrame('StatusBar',nil,statusPanel)
+    castTrack:SetPoint('BOTTOMLEFT',statusPanel,'BOTTOMLEFT',12,123)
+    castTrack:SetPoint('BOTTOMRIGHT',statusPanel,'BOTTOMRIGHT',-12,123)
+    castTrack:SetHeight(14)
+    castTrack:SetMinMaxValues(0,1)
+    castTrack:SetValue(0)
+    castTrack:SetStatusBarTexture('Interface\\TargetingFrame\\UI-StatusBar')
+    castTrack:SetStatusBarColor(.35,.65,.44,1)
+    local castBackground=castTrack:CreateTexture(nil,'BACKGROUND')
+    castBackground:SetAllPoints(castTrack)
+    castBackground:SetColorTexture(.11,.08,.055,.9)
+    local castBorder=castTrack:CreateTexture(nil,'BORDER')
+    castBorder:SetPoint('TOPLEFT',castTrack,'TOPLEFT',0,1)
+    castBorder:SetPoint('BOTTOMRIGHT',castTrack,'BOTTOMRIGHT',0,-1)
+    castBorder:SetColorTexture(.59,.40,.18,.25)
+    if UI.RegisterThemeTarget then UI:RegisterThemeTarget(castTrack,function(_,t)
+        local color=t.accent or {.35,.65,.44}
+        castTrack:SetStatusBarColor(color[1],color[2],color[3],1)
+    end) end
+    local castUpdate=CreateFrame('Frame',nil,statusPanel)
+    castUpdate:SetAllPoints(castTrack)
+    local throttle=0
+    castUpdate:SetScript('OnUpdate',function(_,dt)
+        throttle=throttle+(tonumber(dt) or 0)
+        if throttle<.05 then return end
+        throttle=0
+        local active=AF.GetWorkshopCraftCastProgress and AF:GetWorkshopCraftCastProgress()
+        if active then
+            castTrack:SetValue(active.fraction)
+            footer:SetText(string.format('%s  -  %.1fs remaining',active.name,active.remaining))
+        else
+            castTrack:SetValue(0)
+            local r=AF.lastQueueCraftRequest
+            local status=r and r.status
+            if status=='request_sent' or status=='cast_started' or status=='craft_started' then
+                footer:SetText('Craft requested - waiting for live cast timing / result...')
+            else
+                footer:SetText('Craft timing appears here when the game starts a profession cast.')
+            end
+        end
+    end)
     -- Only five everyday controls. Native recipe selection is automatic for
     -- ordinary crafts; advanced diagnostics remain available via /af craftstatus.
     local openProfession=WorkshopButton(statusPanel,'Open Profession',function()
@@ -733,7 +777,7 @@ function UI:BuildLivingWorkshop(page)
     function page:Select(name)
         local supported={Professions=true,Recipes=true,['Crafting Queue']=true,Materials=true}
         if not supported[name] then name='Professions' end
-        if name~='Crafting Queue' and AF.IsQueueCompactNativeProfession and
+        if name=='Materials' and AF.IsQueueCompactNativeProfession and
             AF:IsQueueCompactNativeProfession() then
             if AF.ReleaseQueueNativeProfession then AF:ReleaseQueueNativeProfession() end
         end

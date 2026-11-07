@@ -1511,6 +1511,104 @@ function AF:OpenQueuedCraftProfession(project,conceal)
     return true,'Opened '..(a.professionName or 'profession')..' in Blizzard UI.'
 end
 
+-- Workshop profession selection uses the SAME quiet native profession
+-- session as Crafting Queue. Opening must occur in the actual row-click
+-- callback: OpenTradeSkill is protected on the client. Never use a timer to
+-- open a profession, and never try to scan another character's skills.
+local function WorkshopCurrentSkillLine(wanted)
+    if type(wanted)~='string' or wanted=='' or type(GetProfessions)~='function'
+        or type(GetProfessionInfo)~='function' then return nil end
+    local ok,a,b,c,d,e,g=pcall(GetProfessions)
+    if not ok then return nil end
+    local indices={a or false,b or false,c or false,d or false,e or false,g or false}
+    for _,index in ipairs(indices) do
+        if type(index)=='number' and index>0 then
+            local found,name,_,_,_,_,_,skillLine=pcall(GetProfessionInfo,index)
+            if found and type(name)=='string' and name:lower()==wanted:lower()
+                and type(skillLine)=='number' and skillLine>0 then
+                return skillLine
+            end
+        end
+    end
+    return nil
+end
+function AF:PrepareWorkshopProfessionForScan(name,ownerKey,recordedID)
+    if InCombatLockdown and InCombatLockdown() then
+        return false,'Cannot prepare a profession in combat.'
+    end
+    if not self.db or not ownerKey or ownerKey~=self:GetCurrentKey() then
+        return false,'This is an offline character. Log into that character to scan its recipes.'
+    end
+    local api=C_TradeSkillUI
+    if type(api)~='table' or type(api.OpenTradeSkill)~='function' then
+        return false,'The native profession API is unavailable.'
+    end
+    local id=WorkshopCurrentSkillLine(name)
+    if not id then
+        -- Recorded IDs are trusted only for a skill the CURRENT character
+        -- still lists as learned; an alt's cached professionID is not enough.
+        return false,'This profession is not available on the current character.'
+    end
+    local opened=LiveCall(api.GetBaseProfessionInfo)
+    local frame=ProfessionsFrame
+    local shown=frame and type(frame.IsShown)=='function' and frame:IsShown() or false
+    local same=shown and type(opened)=='table' and
+        (tonumber(opened.professionID)==id or tonumber(opened.parentProfessionID)==id)
+    self._workshopScanIntent={professionID=id,ownerKey=ownerKey,name=name,
+        at=type(GetTime)=='function' and GetTime() or 0}
+    if not same then
+        local wasCloaked=self:IsQueueCompactNativeProfession()
+        -- Hide before OpenTradeSkill if the frame is already instantiated,
+        -- preventing a visible full-size flash on supported clients.
+        if not wasCloaked and frame and not shown then
+            self:HideQueueNativeProfession(true)
+        end
+        local ok,result=pcall(api.OpenTradeSkill,id)
+        if not ok or result==false then
+            self._workshopScanIntent=nil
+            if not wasCloaked and self:IsQueueCompactNativeProfession() then
+                self:RestoreQueueNativeProfession()
+            end
+            return false,'Could not open '..tostring(name)..'; open it from your spellbook and try again.'
+        end
+        if not self:IsQueueCompactNativeProfession() then self:HideQueueNativeProfession() end
+        if not shown and self:IsQueueCompactNativeProfession() then
+            compactNativeProfession.openedByFoundry=true
+        end
+        if self:IsQueueCompactNativeProfession() then
+            self:MaintainQueueCompactNativeProfession()
+        end
+    else
+        -- A user-opened Blizzard window remains theirs: restoring the
+        -- original visibility on journal close is handled by the shared code.
+        if not self:IsQueueCompactNativeProfession() then self:HideQueueNativeProfession() end
+    end
+    if self.ScheduleRecipeScan then self:ScheduleRecipeScan() end
+    return true,'Scanning '..tostring(name)..' as its native recipe list loads.'
+end
+
+-- Observes the REAL player cast, not the amount queued. The game may start
+-- each craft in a repeat as a separate cast. Never invent timing when it
+-- declines to expose UnitCastingInfo/UnitChannelInfo.
+function AF:GetWorkshopCraftCastProgress()
+    local function read(fn)
+        if type(fn)~='function' then return nil end
+        local ok,name,_,_,startMS,endMS,isTradeSkill=pcall(fn,'player')
+        if not ok or type(name)~='string' or name=='' or isTradeSkill~=true
+            or type(startMS)~='number' or type(endMS)~='number'
+            or endMS<=startMS then return nil end
+        local now=type(GetTime)=='function' and GetTime() or nil
+        if type(now)~='number' then return nil end
+        local elapsed=now-startMS/1000
+        local duration=(endMS-startMS)/1000
+        if elapsed<-.25 or elapsed>duration+.25 then return nil end
+        local fraction=math.max(0,math.min(1,elapsed/duration))
+        return {active=true,name=name,fraction=fraction,
+            remaining=math.max(0,duration-elapsed),duration=duration}
+    end
+    return read(UnitCastingInfo) or read(UnitChannelInfo)
+end
+
 -- v1.0.6: A click on a queued recipe is already a real user interaction.
 -- Use it to start the native profession's asynchronous load ahead of Craft 1
 -- / Craft All. This never calls CraftRecipe or credits an item. If the player

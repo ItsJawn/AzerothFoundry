@@ -1,4 +1,4 @@
-# Azeroth Foundry — v1.0.27 (Forever test build)
+# Azeroth Foundry — v1.0.28 (Forever test build)
 
 *Your Adventurer's Journal*
 
@@ -42,7 +42,15 @@ ProfessionDB, ItemDB and QuestDB are optional dependencies. Foundry should load 
 - `/af navstatus` — city guard navigation diagnostics
 - `/af deps`, `/af craftstatus` — dependency and crafting diagnostics
 
-## Release notes — v1.0.27 (camera-plane Transmog panning)
+## Release notes — v1.0.28 (quiet profession scanning and live crafting cast progress)
+
+- Clicking a current-character profession in Workshop > Professions or Workshop > Recipes prepares Blizzard's native profession interface invisibly and refreshes recorded learned/unlearned recipes as its data loads.
+- Profession data-source changes are observed before recording refreshed recipes. The clicked profession is checked against the active native session, so a previous profession's data is not saved under the new one.
+- Offline-character entries remain browse-only. Simply selecting an alt's saved recipe data never opens or edits that alt's profession.
+- Crafting Queue now shows a native cast-timing bar above Craft 1 / Craft All. It follows genuine profession casts, including individual repeats, and does not claim success or invent a timer before the game reports a cast.
+- The existing protected, player-clicked crafting path, form cancellation, and result-based queue crediting remain unchanged.
+
+## Previous release notes — v1.0.27 (camera-plane Transmog panning)
 
 - Corrected an armor-preview clipping regression introduced by v1.0.26. The mannequin stays inside a fixed model viewport instead of moving the render frame and its clipping boundaries.
 - Uses camera-plane panning: the camera and its look-at point translate by the same vector, preserving camera orientation and model-centered rotation while allowing larger right-drag movements. Mouse-wheel zoom is computed from the native camera baseline.

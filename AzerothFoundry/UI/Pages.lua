@@ -2062,6 +2062,17 @@ function UI:BuildRecipes(page)
         UI:FillList(professions,profEntries,function(entry)
             UI.recipeProfessionFilter=entry.key
             UI.recipeSelectedID=nil
+            if entry.key~=0 and AF.PrepareWorkshopProfessionForScan then
+                local current=AF:GetCurrentKey()
+                -- Never use an alt's recipe list to open or scan this player.
+                -- The function independently verifies the profession against
+                -- GetProfessionInfo before making its protected open call.
+                local key=(UI.recipeCharacterFilter or current)
+                if key==current then
+                    local ok,msg=AF:PrepareWorkshopProfessionForScan(entry.label,current,entry.key)
+                    if not ok and AF.Print then AF.Print(msg) end
+                end
+            end
             page:Refresh()
         end, UI.recipeProfessionFilter)
         local unfiltered=AF:RecipeSnapshotsForScope(opts.scope,

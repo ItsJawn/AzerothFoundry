@@ -388,10 +388,31 @@ function AF:ScanOpenRecipes(silent)
         self.recipeScanMessage = 'Recipe API unavailable in this client.'
         return false, self.recipeScanMessage
     end
+    if type(api.IsDataSourceChanging)=='function' then
+        local changing=Safe(api.IsDataSourceChanging)
+        if changing==true then
+            self.recipeScanMessage='Profession data is changing; waiting for the new recipe list.'
+            return false,self.recipeScanMessage
+        end
+    end
     local info = Safe(api.GetBaseProfessionInfo)
     if type(info) ~= 'table' or not Number(info.professionID) or not info.professionName then
         self.recipeScanMessage = 'Open a profession window to scan its recipes.'
         return false, self.recipeScanMessage
+    end
+    local intent=self._workshopScanIntent
+    local currentTime=type(GetTime)=='function' and GetTime() or 0
+    if intent and currentTime-(intent.at or 0)>5 then
+        self._workshopScanIntent=nil
+        intent=nil
+    end
+    if intent and (intent.ownerKey~=self:GetCurrentKey() or
+        (tonumber(info.professionID)~=intent.professionID and
+         tonumber(info.parentProfessionID)~=intent.professionID)) then
+        -- The old profession can still be reported during a switch. Never
+        -- save its recipe list under the newly clicked profession.
+        self.recipeScanMessage='Waiting for the selected profession to become active.'
+        return false,self.recipeScanMessage
     end
     local ids = Safe(api.GetAllRecipeIDs)
     if type(ids) ~= 'table' or #ids == 0 then
@@ -472,6 +493,7 @@ function AF:ScanOpenRecipes(silent)
         unlearned=missing,
         recipes=byID,
     }
+    if intent then self._workshopScanIntent=nil end
     self.recipeScanMessage = string.format('%s: %d learned, %d unlearned entries recorded.',
         info.professionName, learned, missing)
     if not silent and self.Print then self.Print(self.recipeScanMessage) end
@@ -490,7 +512,7 @@ function AF:ScheduleRecipeScan()
     end
     self.recipeScanTicket = (self.recipeScanTicket or 0)+1
     local ticket = self.recipeScanTicket
-    local delays={0.2, 1.0}
+    local delays={0.2, 0.75, 1.6, 2.8}
     for _, seconds in ipairs(delays) do
         C_Timer.After(seconds, function()
             if ticket ~= self.recipeScanTicket then return end
