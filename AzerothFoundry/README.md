@@ -1,4 +1,4 @@
-# Azeroth Foundry — v1.0.17 (Forever test build)
+# Azeroth Foundry — v1.0.27 (Forever test build)
 
 *Your Adventurer's Journal*
 
@@ -42,7 +42,56 @@ ProfessionDB, ItemDB and QuestDB are optional dependencies. Foundry should load 
 - `/af navstatus` — city guard navigation diagnostics
 - `/af deps`, `/af craftstatus` — dependency and crafting diagnostics
 
-## Release notes — v1.0.17 (recorded recipe rarity)
+## Release notes — v1.0.27 (camera-plane Transmog panning)
+
+- Corrected an armor-preview clipping regression introduced by v1.0.26. The mannequin stays inside a fixed model viewport instead of moving the render frame and its clipping boundaries.
+- Uses camera-plane panning: the camera and its look-at point translate by the same vector, preserving camera orientation and model-centered rotation while allowing larger right-drag movements. Mouse-wheel zoom is computed from the native camera baseline.
+- Preserves v1.0.24's full-body camera, v1.0.25's expanded 200% pan limits, reset, all transmog search/sort improvements, and all existing game systems.
+- Falls back to safe zoom without panning if camera coordinates cannot be obtained from the client. This needs a live Forever visual check before public release.
+
+## Previous release notes — v1.0.26 (flat armor panning)
+
+- Fixed a perspective/skew effect while panning the large Transmog armor preview up or down.
+- Armor panning now moves the model's UI viewport inside a clipped frame instead of translating the 3D camera projection. Camera pitch, yaw, facing, orbit target, distance, and roll are not touched by this change.
+- Retains 200% panning limits and Reset 3D View; model-frame anchors reset between different selected appearances.
+- Leaves gallery thumbnails, weapon/mount/toy viewers, sorting, search, and all other Foundry functionality unchanged.
+
+## Previous release notes — v1.0.25 (simplified Transmog preview and expanded panning)
+
+- Removed the Full Body / Item Focus switch in the large Transmog preview. Full Body is now the permanent default for armor, matching the confirmed-working v1.0.24 viewer.
+- Expanded right-drag panning from 80% to 200% of the preview width and height per direction. Reset 3D View returns to the baseline framing.
+- Preserved model-centered rotation, mouse-wheel zoom, weapon/item previews, gallery cameras and all other systems.
+
+## Previous release notes — v1.0.24 (full-body camera preview)
+
+- Replaced problematic thumbnail camera offsets with Blizzard's full-body dressing-room camera for large Transmog armor previews.
+- Kept model-centered rotation and adjustable zoom/pan; retained native item cameras for the small gallery cards and weapon previews.
+- Confirmed in Forever that Full Body mode, rotation, zoom and pan work as intended.
+
+## Previous release notes — v1.0.22 (transmog detail pivot correction)
+
+- Corrected a misplaced orbit pivot in the right-hand Transmog 3D preview. The large detail camera now re-anchors its target to the dressed mannequin when the client exposes the required camera and model coordinates, while preserving the original wardrobe camera orientation.
+- Removed inherited horizontal thumbnail offsets from the large detail viewer, avoiding a character standing far off to one side.
+- Reduced the automatic camera pullback so full-body previews are not unnecessarily tiny. Zoom, rotation, pan and Reset 3D View remain available.
+- Added a model-centred rotation fallback when native camera coordinates cannot be read. Gallery card cameras and standalone weapon previews are unchanged.
+- Fixed the Technical/API Details panel reporting `Wardrobe camera: nil` for previews whose camera ID was actually resolved; it now also records the detail orbit's status to help diagnose client differences.
+- UI tests and syntax validation passed; this remains a TEST build until the pivot is visually checked in Forever.
+
+## Earlier update — v1.0.20 (gallery camera reuse)
+
+- Started reusing each appearance's native gallery camera in the detail viewer instead of forcing a full-body dressing-room camera. The misplaced pivot from that first implementation is addressed in v1.0.24.
+
+## Earlier update — v1.0.19 (transmog browsing and preview framing)
+
+- Transmog search now resolves actual appearance names incrementally, instead of searching only the initial `Appearance #ID` placeholders. Search can also match appearance IDs, item IDs and names of known appearance sources.
+- Added **Game Order**, **Name A–Z** and **Name Z–A** sorting. Game Order follows Blizzard's wardrobe `uiOrder` and slot/category ordering, not arbitrary item IDs.
+- Added **All Slots** and **All Armor** to the existing wardrobe slot selector. All Armor includes the eleven armor categories; All Slots includes armor and weapon categories. Existing specific-slot filtering is preserved.
+- Large wardrobe views use session-only catalog caching and incremental name lookups; source metadata is not stored as player discovery.
+- (Superseded by v1.0.20) Earlier full-body-camera experiments for robes were replaced by native appearance cameras; v1.0.24 further corrects their orbit pivot.
+- Corrected an invalid assumption about `GetUICameraInfo`: it returns camera positions and look-at coordinates, not a yaw in the fourth return value. Native model facing is now preserved.
+- Compatible with the Forever `16001` interface. These UI changes still require visual verification in the game client.
+
+## Earlier update — v1.0.17 (recorded recipe rarity)
 
 - Recorded Recipes now shows a thin color bar beside each recipe icon indicating the **crafted item's quality**, separately from profession skill-up chance.
 - A compact **Rarity** dropdown below the existing search field filters Poor, Common, Uncommon, Rare, Epic, Legendary, Artifact, Heirloom, WoW Token, and Unknown quality (plus All).
@@ -92,4 +141,4 @@ ProfessionDB, ItemDB and QuestDB are optional dependencies. Foundry should load 
 
 ## Earlier updates
 
-All previous fixes through v1.0.12 are included. See the CurseForge/GitHub changelog for earlier details. This remains a **TEST build** pending in-game verification.
+All previous fixes through v1.0.12 are included. See the CurseForge/GitHub changelog for earlier details. This remains a **TEST build** pending in-game verification of the latest changes.

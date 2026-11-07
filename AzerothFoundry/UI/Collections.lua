@@ -281,8 +281,7 @@ end
 -- The stock wardrobe pairs a UI camera with a mannequin setup. The camera
 -- already defines an intended yaw; forcing our old arbitrary 45-degree pose
 -- *after* applying it turned the camera's nicely cropped view into a side view.
--- GetUICameraInfo returns the camera's yaw (radians) when supported. Use that,
--- otherwise let Model_ApplyUICamera own facing rather than overwriting it.
+-- Let Model_ApplyUICamera own facing rather than overwriting it.
 -- Without a native camera use conservative, slot-aware front/three-quarter
 -- fallback values; these are TEST defaults, not claims of Blizzard's angles.
 local function FallbackWardrobeFacing(entry)
@@ -303,33 +302,26 @@ local function FallbackWardrobeFacing(entry)
     end
     return -90,'centered body'
 end
-local function ReadUICameraFacing(camera)
-    if not camera or type(GetUICameraInfo)~='function' then return nil end
-    local _,_,_,yaw=Try(GetUICameraInfo,camera)
-    if type(yaw)=='number' and yaw==yaw and math.abs(yaw)<=math.pi*2 then
-        return yaw
-    end
-end
+-- GetUICameraInfo returns camera coordinates and a look-at position, not yaw.
+-- In particular its 4th result is lookAtX. Using that as radians caused
+-- wardrobe-facing errors; preserve the actual model facing after camera setup.
 local function ApplyFacingAfterCamera(model)
     local offset=tonumber(model.afWardrobeFacingOffset) or 0
-    local camera=model.afWardrobeCameraID
-    local yaw=camera and ReadUICameraFacing(camera) or nil
-    if yaw then
-        local facing=yaw+math.rad(offset)
-        Call(model,'SetFacing',facing)
-        model.afWardrobeFinalFacing=facing
-        model.afWardrobeFacingMode='Native camera yaw + '..offset..' degree adjustment'
-    elseif model.afWardrobeCameraApplied and offset==0 then
-        -- Preserve the native camera result. A manual SetFacing here was the bug.
-        model.afWardrobeFinalFacing=Call(model,'GetFacing')
-        model.afWardrobeFacingMode='Native camera (unmodified yaw)'
-    else
-        local fallback,slot=FallbackWardrobeFacing(model.afWardrobeEntry)
-        local facing=math.rad(fallback+offset)
-        Call(model,'SetFacing',facing)
-        model.afWardrobeFinalFacing=facing
-        model.afWardrobeFacingMode='Slot fallback '..slot..' ('..fallback..' degrees) + '..offset
+    if model.afWardrobeCameraApplied then
+        local native=Call(model,'GetFacing')
+        if type(native)=='number' then
+            local facing=native+math.rad(offset)
+            if offset~=0 then Call(model,'SetFacing',facing) end
+            model.afWardrobeFinalFacing=facing
+            model.afWardrobeFacingMode='Native camera facing + '..offset..' degree adjustment'
+            return
+        end
     end
+    local fallback,slot=FallbackWardrobeFacing(model.afWardrobeEntry)
+    local facing=math.rad(fallback+offset)
+    Call(model,'SetFacing',facing)
+    model.afWardrobeFinalFacing=facing
+    model.afWardrobeFacingMode='Slot fallback '..slot..' ('..fallback..' degrees) + '..offset
 end
 -- Preserve the native weapon camera but move somewhat closer. A modest
 -- default 1.3x weapon-only scale is intentionally separate from saved user
@@ -342,14 +334,80 @@ local function ApplyWeaponFraming(model,pose)
     model.afWeaponPreviewScale=zoom
     if model.afWardrobeEntry then model.afWardrobeEntry.previewWeaponScale=zoom end
 end
+-- Large armor previews must not inherit the tightly cropped item-tile
+-- camera. In the detail pane, use the client's own full-body dressing-room
+-- camera (1) instead. The existing gallery still uses its item camera.
+-- The large armor viewer always uses full-body framing. Small gallery
+-- cards still use their item-specific cameras. If the full-body preset isn't
+-- available, the existing native camera fallback is retained internally.
+-- No guessed screen-space or world-space offsets are applied.
+local function EnableDetailWardrobeCamera(model)
+    model.afWardrobeInteractiveCamera=false
+    model.afDetailPivotCentred=false
+    model.afDetailPivotStatus='Not an armor detail preview'
+    model.afDetailUsingModelCenter=false
+    if not model.afWardrobeDetail or model.afWardrobeWeaponOnly then return false end
+    if type(model.UseModelCenterToTransform)=='function' then
+        local ok=pcall(model.UseModelCenterToTransform,model,true)
+        local confirmed=Call(model,'IsUsingModelCenterToTransform')
+        if ok and confirmed~=false then
+            model.afDetailPivotCentred=true
+            model.afDetailUsingModelCenter=true
+        end
+    end
+    if type(model.MakeCurrentCameraCustom)=='function' then
+        local ok,accepted=pcall(model.MakeCurrentCameraCustom,model)
+        model.afWardrobeInteractiveCamera=ok and accepted~=false
+        -- Some clients reset the transform flag when a camera becomes custom.
+        if model.afDetailPivotCentred then
+            pcall(model.UseModelCenterToTransform,model,true)
+        end
+    end
+    model.afDetailPivotStatus=(model.afDetailPivotCentred and 'Native model-centred rotation' or 'Model-centre unavailable')
+        ..'; '..(model.afDetailCameraMode=='body' and 'full-body camera 1' or 'native appearance camera')
+    return model.afWardrobeInteractiveCamera
+end
+local DETAIL_ARMOR_CAMERA_PULLBACK=1.0
+local function ApplyFullBodyCamera(model)
+    if not model.afWardrobeDetail or model.afWardrobeWeaponOnly
+        or model.afDetailCameraMode~='body' or type(model.SetCamera)~='function' then return false end
+    -- SetCamera(1) is Blizzard's frontal, full-body dressing-room camera.
+    -- This is a camera preset, not an estimated offset from an item thumbnail.
+    local ok,accepted=pcall(model.SetCamera,model,1)
+    if not ok or accepted==false then return false end
+    Call(model,'SetCamDistanceScale',1)
+    Call(model,'SetPortraitZoom',0)
+    Call(model,'SetFacing',0)
+    model.afWardrobeCameraApplied=true
+    model.afWardrobeFinalFacing=0
+    model.afWardrobeFacingMode='Full-body dressing-room front'
+    EnableDetailWardrobeCamera(model)
+    if model.afWardrobeEntry then
+        model.afWardrobeEntry.previewPivotStatus=model.afDetailPivotStatus
+        model.afWardrobeEntry.previewFramingStatus='Full-body camera 1; no manual view offsets'
+    end
+    return true
+end
 local function ApplyWardrobeCamera(model,entry,pose)
     local camera,origin=WardrobeCameraID(entry)
+    -- Store this on the entry so Technical Details reports the real camera
+    -- rather than nil (regression introduced by v1.0.20).
+    entry.previewCameraID=camera
+    entry.previewCameraOrigin=origin
     model.afWardrobeCameraID=camera
     model.afWardrobeEntry=entry
     model.afWardrobeFacingOffset=tonumber(pose and pose.wardrobeFacingOffset) or 0
     model.afWardrobeCameraApplied=false
-    entry.previewCameraID=camera
-    entry.previewCameraOrigin=origin
+    model.afWardrobeInteractiveCamera=false
+    model.afDetailPivotCentred=false
+    model.afDetailPivotStatus=nil
+    if ApplyFullBodyCamera(model) then
+        entry.previewFacingMode=model.afWardrobeFacingMode
+        entry.previewFacingDegrees=0
+        return 'Full-body detail camera 1; gallery item camera '..tostring(camera)
+    end
+    -- Preserve native item cameras for gallery cards, weapons, and clients
+    -- where the large-view full-body camera cannot be applied.
     if camera and type(Model_ApplyUICamera)=='function' then
         -- A pooled frame must not retain the previous item's camera or facing.
         Call(model,'RefreshCamera')
@@ -357,6 +415,10 @@ local function ApplyWardrobeCamera(model,entry,pose)
         if ok then
             model.afWardrobeCameraApplied=true
             ApplyFacingAfterCamera(model)
+            EnableDetailWardrobeCamera(model)
+            if model.afWardrobeDetail then
+                entry.previewPivotStatus=model.afDetailPivotStatus
+            end
             ApplyWeaponFraming(model,pose)
             entry.previewFacingMode=model.afWardrobeFacingMode
             entry.previewFacingDegrees=model.afWardrobeFinalFacing and math.deg(model.afWardrobeFinalFacing)
@@ -386,11 +448,22 @@ local function SetupWardrobeModel(model,weaponOnly)
         -- Native wardrobe re-applies camera when models finish loading.
         local ok=pcall(model.SetScript,model,'OnModelLoaded',function(self)
             local id=self.afWardrobeCameraID
-            if id and type(Model_ApplyUICamera)=='function' then
-                local ok=pcall(Model_ApplyUICamera,self,id)
-                self.afWardrobeCameraApplied=ok
+            self.afWardrobeInteractiveCamera=false
+            if ApplyFullBodyCamera(self) then
+                -- Full-body mode must survive SetUnit/TryOn's asynchronous load.
+            else
+                if id and type(Model_ApplyUICamera)=='function' then
+                    local ok=pcall(Model_ApplyUICamera,self,id)
+                    self.afWardrobeCameraApplied=ok
+                    if ok then
+                        EnableDetailWardrobeCamera(self)
+                        if self.afWardrobeDetail and self.afWardrobeEntry then
+                            self.afWardrobeEntry.previewPivotStatus=self.afDetailPivotStatus
+                        end
+                    end
+                end
+                ApplyFacingAfterCamera(self)
             end
-            ApplyFacingAfterCamera(self)
             ApplyWeaponFraming(self,{scale=self.afWardrobeUserScale or 1})
         end)
         model.afCameraCallbackInstalled=ok
@@ -407,6 +480,8 @@ local function LoadDressedAppearance(model,entry,pose,animate)
     model.afWardrobeEntry=entry
     model.afWardrobeFacingOffset=tonumber(pose.wardrobeFacingOffset) or 0
     model.afWardrobeCameraApplied=false
+    model.afWardrobeInteractiveCamera=false -- pooled model may have shown a robe previously
+    -- afDetailCameraMode is assigned by RefreshViewer for the large viewer.
     model.afWardrobeUserScale=tonumber(pose.scale) or 1
     SetupWardrobeModel(model,false)
     entry.previewRenderPath='ARMOR_MANNEQUIN_TRYON'
@@ -522,6 +597,9 @@ local function EntryDiagnostics(entry)
         '3D preview: '..tostring(entry.previewStatus or 'Not attempted; hover with 3D ON'),
         'Preview path: '..tostring(entry.previewRenderPath)..' | classified by: '..tostring(entry.previewTypeSource),
         'Wardrobe camera: '..tostring(entry.previewCameraID)..' | source: '..tostring(entry.previewCameraOrigin),
+        'Detail orbit pivot: '..tostring(entry.previewPivotStatus or 'Not initialized'),
+        'Detail camera framing: '..tostring(entry.previewFramingStatus or 'Not applied'),
+        'Detail pan: '..tostring(entry.previewPanStatus or 'Not initialized'),
         'Preview facing: '..tostring(entry.previewFacingDegrees)..' deg | mode: '..tostring(entry.previewFacingMode),
         'Weapon preview scale: '..tostring(entry.previewWeaponScale or 'n/a'),
         'Name origin: '..tostring(entry.nameOrigin)..' | Item data pending: '..tostring(entry.needsItemData),
@@ -702,6 +780,59 @@ function UI:RefreshCollectionModelLab()
     end
 end
 
+-- A Model frame is its own render target. Reanchoring that frame to pan
+-- moves its clipping rectangle along with it, cutting the mannequin in half.
+-- Large perspective-space SetViewTranslation values were also visually skewed.
+-- For the large armor viewer, instead slide the *camera and its target together*
+-- along the image plane. This preserves its view direction and rotation pivot,
+-- and keeps the 3D model viewport fixed. Other collection viewers are unchanged.
+local function CameraPanBasis(position,target)
+    if type(position)~='table' or type(target)~='table' then return nil end
+    local fx,fy,fz=target[1]-position[1],target[2]-position[2],target[3]-position[3]
+    local distance=math.sqrt(fx*fx+fy*fy+fz*fz)
+    if distance<0.0001 then return nil end
+    fx,fy,fz=fx/distance,fy/distance,fz/distance
+    -- WoW model space uses Z as up. Camera right = forward cross world-up.
+    local rx,ry,rz=fy,-fx,0
+    local rn=math.sqrt(rx*rx+ry*ry)
+    if rn<0.0001 then return nil end
+    rx,ry,rz=rx/rn,ry/rn,rz/rn
+    local ux,uy,uz=ry*fz-rz*fy,rz*fx-rx*fz,rx*fy-ry*fx
+    return distance,{rx,ry,rz},{ux,uy,uz}
+end
+local function ApplyDetailCameraPlanePan(model,viewport,dx,dy,zoom,position,target)
+    if type(model.SetCameraPosition)~='function' or type(model.SetCameraTarget)~='function'
+        or type(viewport.GetHeight)~='function' then return 'unavailable' end
+    local distance,right,up=CameraPanBasis(position,target)
+    if not distance then return 'unavailable' end
+    local pixelsHigh=math.max(1,tonumber(viewport:GetHeight()) or 190)
+    -- Scale with the camera distance so panning feels consistent at different
+    -- zoom levels. Use the initial full-body camera as a stable reference.
+    local factor=(distance/math.max(0.01,zoom))*0.9/pixelsHigh
+    local shiftX=-factor*(dx*right[1]+dy*up[1])
+    local shiftY=-factor*(dx*right[2]+dy*up[2])
+    local shiftZ=-factor*(dx*right[3]+dy*up[3])
+    local tx,ty,tz=target[1]+shiftX,target[2]+shiftY,target[3]+shiftZ
+    local px=tx+(position[1]-target[1])/zoom
+    local py=ty+(position[2]-target[2])/zoom
+    local pz=tz+(position[3]-target[3])/zoom
+    -- Keep a fixed camera orientation by translating target and eye in lockstep.
+    -- Only the target-to-eye distance changes with mouse wheel zoom.
+    local okT,resultT=pcall(model.SetCameraTarget,model,tx,ty,tz)
+    local okP,resultP=pcall(model.SetCameraPosition,model,px,py,pz)
+    if not okT or resultT==false or not okP or resultP==false then
+        return 'unavailable'
+    end
+    return 'camera-plane'
+end
+local function ApplyDetailModelPan(model,viewport,kind,dx,dy,baseX,baseY)
+    if kind=='armor' then return 'unavailable' end -- never move a 3D render target
+    if type(model.SetViewTranslation)=='function' and type(baseX)=='number' and type(baseY)=='number' then
+        Call(model,'SetViewTranslation',baseX+dx,baseY+dy)
+        return 'view'
+    end
+    return 'unavailable'
+end
 function UI:BuildCollections(page)
     -- Build only on first visit. All high-risk APIs run in guarded callbacks.
     -- Category selection is now in the nested Collections sidebar tree.
@@ -764,7 +895,8 @@ function UI:BuildCollections(page)
         local maxWidth=available>0 and math.max(255,available-410) or 620
         detailWidth=math.floor(math.max(255,math.min(maxWidth,tonumber(width) or 272))+0.5)
         left:ClearAllPoints()
-        left:SetPoint('TOPLEFT',page,'TOPLEFT',12,-51)
+        left:SetPoint('TOPLEFT',page,'TOPLEFT',12,
+            AF.db.collections.settings.category=='transmog' and -84 or -51)
         left:SetPoint('BOTTOMRIGHT',page,'BOTTOMRIGHT',-(detailWidth+19),61)
         right:ClearAllPoints()
         right:SetPoint('TOPLEFT',left,'TOPRIGHT',8,0)
@@ -1250,6 +1382,11 @@ function UI:BuildCollections(page)
     -- makes the details pane wider. Vertical space for the text and buttons is
     -- reserved in UpdateDetailViewerSize below.
     viewer:SetHeight(190)
+    -- The entire 3D viewport stays anchored to this panel. The clip protects
+    -- neighboring controls, but must not move with a panned model frame.
+    if type(viewer.SetClipsChildren)=='function' then
+        Call(viewer,'SetClipsChildren',true)
+    end
     UI:Background(viewer,P.leather,true)
     local itemIcon=viewer:CreateTexture(nil,'ARTWORK');itemIcon:SetSize(78,78)
     itemIcon:SetPoint('CENTER',viewer,'CENTER',0,0);itemIcon:SetTexture(MYSTERY_ICON)
@@ -1262,6 +1399,8 @@ function UI:BuildCollections(page)
     local viewAngle,viewZoom,viewPanX,viewPanY=0,1,0,0
     local viewerBaseFacing,viewerBaseScale=0,1
     local viewerBaseViewX,viewerBaseViewY
+    local viewerBaseCameraDistance,viewerBaseCameraFacing
+    local viewerBaseCameraPosition,viewerBaseCameraTarget
     local viewerHelp=Label(right,'Left drag: rotate     Right drag: pan     Wheel: zoom','small',P.ink)
     -- This help row moves WITH the preview when the panel is resized.
     viewerHelp:SetPoint('TOPLEFT',viewer,'BOTTOMLEFT',1,-5)
@@ -1286,23 +1425,68 @@ function UI:BuildCollections(page)
         if viewerKind~='creature' and type(model.afWardrobeFinalFacing)=='number' then
             facing=model.afWardrobeFinalFacing
         end
-        Call(model,'SetFacing',facing+viewAngle)
-        Call(model,'SetModelScale',viewerBaseScale*viewZoom)
-        -- Shift the CAMERA VIEW in screen-space, NOT the model's world/XYZ
-        -- position. SetPosition moved the model/pivot instead of panning the
-        -- viewport. SetViewTranslation takes UI units and is available on
-        -- Forever's Model / PlayerModel / DressUpModel API.
-        if type(model.SetViewTranslation)=='function' and viewerBaseViewX then
-            Call(model,'SetViewTranslation',viewerBaseViewX+viewPanX,viewerBaseViewY+viewPanY)
+        if model.afWardrobeInteractiveCamera then
+            -- Rotate the mannequin, never the camera's orbit target.
+            Call(model,'SetFacing',facing+viewAngle)
+            if viewerKind=='armor' and viewerBaseCameraPosition and viewerBaseCameraTarget then
+                -- This replaces both frame movement (v1.0.26 clipping) and
+                -- SetViewTranslation (earlier off-axis perspective artifact).
+                -- Zoom and pan are applied together from the unchanged baseline
+                -- each time, so adjustments cannot accumulate or drift.
+                ApplyDetailCameraPlanePan(model,viewer,viewPanX,viewPanY,viewZoom,
+                    viewerBaseCameraPosition,viewerBaseCameraTarget)
+            elseif viewerBaseCameraDistance and type(model.SetCameraDistance)=='function' then
+                Call(model,'SetCameraDistance',viewerBaseCameraDistance*DETAIL_ARMOR_CAMERA_PULLBACK/viewZoom)
+            else
+                Call(model,'SetCamDistanceScale',DETAIL_ARMOR_CAMERA_PULLBACK/viewZoom)
+            end
+        else
+            Call(model,'SetFacing',facing+viewAngle)
+            Call(model,'SetModelScale',viewerBaseScale*viewZoom)
+        end
+        -- Other collection viewers retain their original view-translation pan.
+        if viewerKind~='armor' then
+            ApplyDetailModelPan(model,viewer,viewerKind,viewPanX,viewPanY,viewerBaseViewX,viewerBaseViewY)
         end
     end
     local function CaptureViewerTranslation(model)
-        -- Preserve a native wardrobe camera's initial view translation.
+        -- Use each camera's own baseline instead of an assumed origin. Never
+        -- copy a previous appearance's pan or apply a guessed vertical lift.
         local x,y=Call(model,'GetViewTranslation')
         viewerBaseViewX=type(x)=='number' and x or 0
         viewerBaseViewY=type(y)=='number' and y or 0
         model.afDetailBaseViewX=viewerBaseViewX
         model.afDetailBaseViewY=viewerBaseViewY
+        -- Save distance after the native model/camera is loaded. Camera
+        -- facing is diagnostic only: we never orbit the custom camera.
+        -- The native wardrobe camera can be reinstalled asynchronously, so
+        -- capture baselines at first render and after OnModelLoaded.
+        viewerBaseCameraDistance,viewerBaseCameraFacing=nil,nil
+        viewerBaseCameraPosition,viewerBaseCameraTarget=nil,nil
+        if model.afWardrobeInteractiveCamera then
+            local x,y,z=Call(model,'GetCameraPosition')
+            local tx,ty,tz=Call(model,'GetCameraTarget')
+            local function finite(n) return type(n)=='number' and n==n and math.abs(n)<100000 end
+            if finite(x) and finite(y) and finite(z) and
+                finite(tx) and finite(ty) and finite(tz) then
+                local position,target={x,y,z},{tx,ty,tz}
+                if CameraPanBasis(position,target) then
+                    viewerBaseCameraPosition,viewerBaseCameraTarget=position,target
+                end
+            end
+            local distance=Call(model,'GetCameraDistance')
+            local cameraFacing=Call(model,'GetCameraFacing')
+            if type(distance)=='number' and distance>0 and distance<100000 then
+                viewerBaseCameraDistance=distance
+            end
+            if type(cameraFacing)=='number' and cameraFacing==cameraFacing then
+                viewerBaseCameraFacing=cameraFacing
+            end
+        end
+        if model.afWardrobeDetail and model.afWardrobeEntry then
+            model.afWardrobeEntry.previewPanStatus=(viewerBaseCameraPosition and viewerBaseCameraTarget)
+                and 'Camera-plane (eye + target; no frame clipping)' or 'Unavailable: no camera vectors'
+        end
     end
     local function ResetView()
         viewAngle,viewZoom,viewPanX,viewPanY=0,1,0,0
@@ -1352,7 +1536,7 @@ function UI:BuildCollections(page)
                     -- Blizzard's native wardrobe camera may change the
                     -- view translation during an asynchronous model load.
                     -- Capture that new origin before reapplying user panning.
-                    if self.afDetailAwaitingView then
+                    if self.afDetailAwaitingView or self.afWardrobeDetail then
                         CaptureViewerTranslation(self)
                         self.afDetailAwaitingView=nil
                     end
@@ -1374,11 +1558,20 @@ function UI:BuildCollections(page)
             if type(m.SetViewTranslation)=='function' and m.afDetailBaseViewX then
                 Call(m,'SetViewTranslation',m.afDetailBaseViewX,m.afDetailBaseViewY)
             end
+            -- Reset the old experimental frame-pan anchors from v1.0.26.
+            -- All new camera-plane panning keeps the model anchored to viewer.
+            if m==viewerModels.armor and type(m.ClearAllPoints)=='function'
+                and type(m.SetAllPoints)=='function' then
+                m:ClearAllPoints()
+                m:SetAllPoints(viewer)
+            end
             m.afDetailAwaitingView=nil
             m:Hide()
         end
         viewerKind=nil
         viewerBaseViewX,viewerBaseViewY=nil,nil
+        viewerBaseCameraDistance,viewerBaseCameraFacing=nil,nil
+        viewerBaseCameraPosition,viewerBaseCameraTarget=nil,nil
         itemIcon:SetTexture((entry and GoodTexture(entry.icon)) or MYSTERY_ICON)
         itemIcon:Show()
         ResetView()
@@ -1456,6 +1649,9 @@ function UI:BuildCollections(page)
                 why='No usable toy item model in this client'
             end
         else
+            model.afWardrobeDetail=(kind=='armor')
+            model.afDetailCameraMode=(kind=='armor') and 'body' or nil
+            entry.previewFramingStatus=nil
             ok,why=LoadTransmogPreview(model,entry,pose,true)
             if kind=='weapon' then viewerBaseScale=viewerBaseScale*1.30 end
             if type(model.afWardrobeFinalFacing)=='number' then
@@ -1479,7 +1675,11 @@ function UI:BuildCollections(page)
         if mountSpecialButton and entry.category=='mounts' and kind=='creature' then
             mountSpecialButton:Show()
         end
-        if type(model.SetViewTranslation)=='function' then
+        if viewerKind=='armor' and viewerBaseCameraPosition and viewerBaseCameraTarget then
+            viewerHelp:SetText('Left drag: rotate     Right drag: pan     Wheel: zoom')
+        elseif viewerKind=='armor' then
+            viewerHelp:SetText('Left drag: rotate     Wheel: zoom     Pan unavailable for this camera')
+        elseif type(model.SetViewTranslation)=='function' then
             viewerHelp:SetText('Left drag: rotate     Right drag: pan view     Wheel: zoom')
         else
             viewerHelp:SetText('Left drag: rotate     Wheel: zoom     Pan unavailable')
@@ -1507,10 +1707,13 @@ function UI:BuildCollections(page)
         if dragButton=='LeftButton' then
             viewAngle=viewAngle+dx*0.015
         else
-            -- UI units rather than model/world coordinates. Dragging shifts
-            -- the viewport's projected image; the model pivot stays fixed.
-            local limitX=math.max(80,(viewer:GetWidth() or 220)*0.80)
-            local limitY=math.max(65,(viewer:GetHeight() or 190)*0.80)
+            -- UI drag units. For armor, translate eye and target together
+            -- in a plane parallel to the camera image; never move the model
+            -- frame, tilt the camera, or alter the projection. Allow up to
+            -- two viewport widths/heights of movement in either direction.
+            -- Reset 3D View remains the immediate way back to the baseline.
+            local limitX=math.max(160,(viewer:GetWidth() or 220)*2.0)
+            local limitY=math.max(130,(viewer:GetHeight() or 190)*2.0)
             viewPanX=math.max(-limitX,math.min(limitX,viewPanX+dx))
             viewPanY=math.max(-limitY,math.min(limitY,viewPanY+dy))
         end
@@ -1607,6 +1810,8 @@ function UI:BuildCollections(page)
         -- direct call also covers native builds which don't trigger it for an
         -- anchor-only geometry change.
         ResizeDetailText()
+        -- Keep the body framing proportional to the detail viewer after resize.
+        if viewerKind=='armor' then ApplyView() end
     end
     right:HookScript('OnSizeChanged',UpdateDetailViewerSize)
     UpdateDetailViewerSize()
@@ -1641,7 +1846,6 @@ function UI:BuildCollections(page)
     resetView:SetSize(113,23)
     resetView:SetPoint('TOPRIGHT',viewer,'TOPRIGHT',-8,-8)
     resetView:SetFrameLevel(modelInput:GetFrameLevel()+2)
-
     -- The actual mount special is animation 94 (MountSpecial), not the
     -- /mountspecial slash command: the latter would animate the player's
     -- live mount, rather than the selected model inside this preview.
@@ -1903,7 +2107,7 @@ function UI:BuildCollections(page)
     slotBody:SetWidth(178)
     local slotButtons={}
     local y=4
-    for id=1,29 do
+    for _,id in ipairs({0,-1,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29}) do
         if id==1 or id==12 then
             local group=Label(slotBody,id==1 and 'ARMOR' or 'WEAPONS','small',P.brass)
             group:SetPoint('TOPLEFT',slotBody,'TOPLEFT',8,-y)
@@ -1911,8 +2115,16 @@ function UI:BuildCollections(page)
             y=y+19
         end
         local chosen=id
-        local choice=CollectionButton(slotBody,SlotLabel(id),function()
-            AF.db.collections.settings.transmogCategory=chosen
+        local text=id==0 and 'All Slots' or (id==-1 and 'All Armor' or SlotLabel(id))
+        local choice=CollectionButton(slotBody,text,function()
+            if AF.db.collections.settings.transmogCategory~=chosen then
+                AF.db.collections.settings.transmogCategory=chosen
+                -- A slot change changes the *catalog*, not only the label.
+                -- Discard outstanding name-index work from the old slot and
+                -- force a fresh native query, while keeping resolved names.
+                AF._transmogBaseCatalogCache=nil
+                page._transmogNameIndexJob=nil
+            end
             slotMenu:Hide()
             page.selected=nil;page.pageNumber=1;page:Refresh()
         end)
@@ -2000,12 +2212,54 @@ function UI:BuildCollections(page)
         choice:SetSize(148,23)
         choice:SetPoint('TOPLEFT',8,-5-(i-1)*25)
     end
+    -- Transmog-only second toolbar row keeps the existing class/slot controls
+    -- untouched. Game Order uses the native wardrobe uiOrder field.
+    local sortButton,sortMenu
+    local sortNames={game='Game Order',az='Name A-Z',za='Name Z-A'}
+    sortButton=CollectionButton(page,'Sort: Game Order  v',function()
+        sortMenu:SetShown(not sortMenu:IsShown())
+        if sortMenu:IsShown() then
+            slotMenu:Hide();classMenu:Hide();visibilityMenu:Hide()
+            sortMenu:Raise()
+        end
+    end)
+    sortButton:SetSize(167,25)
+    sortButton:SetPoint('TOPLEFT',page,'TOPLEFT',12,-50)
+    sortMenu=Card(page)
+    sortMenu:SetFrameStrata('DIALOG')
+    sortMenu:SetFrameLevel(math.max(32,(page:GetFrameLevel() or 1)+29))
+    sortMenu:SetSize(167,91)
+    sortMenu:SetPoint('TOPLEFT',sortButton,'BOTTOMLEFT',0,-2)
+    sortMenu:Hide()
+    for i,opt in ipairs({{'game','Game Order'},{'az','Name A-Z'},{'za','Name Z-A'}}) do
+        local chosen=opt[1]
+        local button=CollectionButton(sortMenu,opt[2],function()
+            AF.db.collections.settings.transmogSort=chosen
+            sortMenu:Hide()
+            page.pageNumber=1;page.selected=nil;page:Refresh()
+        end)
+        button:SetPoint('TOPLEFT',sortMenu,'TOPLEFT',6,-4-(i-1)*28)
+        button:SetSize(155,26)
+    end
+    page:HookScript('OnHide',function() sortMenu:Hide() end)
     local transmogCache={}
     -- The model-icon lookup may succeed before GetItemInfo can resolve a name.
     -- Only invalidate pending cards for the item whose data actually arrived.
     local itemUpdates=CreateFrame('Frame',nil,page)
     itemUpdates:RegisterEvent('GET_ITEM_INFO_RECEIVED')
     itemUpdates:RegisterEvent('ITEM_DATA_LOAD_RESULT')
+    -- Use a separate event listener; item-load args are item IDs, while
+    -- wardrobe updates invalidate the whole base appearance catalog.
+    local wardrobeChanges=CreateFrame('Frame',nil,page)
+    for _,event in ipairs({'TRANSMOG_COLLECTION_UPDATED','NEW_TRANSMOG_ADDED'}) do
+        pcall(wardrobeChanges.RegisterEvent,wardrobeChanges,event)
+    end
+    wardrobeChanges:SetScript('OnEvent',function()
+        AF._transmogBaseCatalogCache=nil
+        AF.collectionClassEligibilityCache=nil
+        page._transmogNameIndexJob=nil
+        if page:IsShown() and AF.db.collections.settings.category=='transmog' then page:Refresh() end
+    end)
     itemUpdates:SetScript('OnEvent',function(_,event,itemID,success)
         itemID=tonumber(itemID)
         if not itemID or not pendingItemIDs[itemID] then return end
@@ -2023,7 +2277,11 @@ function UI:BuildCollections(page)
                 end
             end
         end
-        if needsRefresh and page:IsShown() and page.Refresh then page:Refresh() end
+        if needsRefresh and page:IsShown() and page.Refresh then
+            -- Let a pending item become searchable once its name is available.
+            page._transmogNameIndexJob=nil
+            page:Refresh()
+        end
     end)
     function page:ResolveTransmog(entry)
         if not entry or entry.category~='transmog' then return end
@@ -2041,6 +2299,69 @@ function UI:BuildCollections(page)
             'sourceCount','sourceChecked','resolutionStatus','nameOrigin','needsItemData'}) do
             entry[k]=cached[k]
         end
+    end
+    local function TransmogSearchMatch(entry,needle)
+        if needle=='' then return true end
+        if string.find(string.lower(entry.name or ''),needle,1,true) or
+            string.find(tostring(entry.id),needle,1,true) or
+            (entry.itemID and string.find(tostring(entry.itemID),needle,1,true)) then return true end
+        if type(entry.sourceItems)=='table' then
+            for _,source in ipairs(entry.sourceItems) do
+                if (type(source.name)=='string' and string.find(source.name:lower(),needle,1,true))
+                    or (source.itemID and string.find(tostring(source.itemID),needle,1,true)) then
+                    return true
+                end
+            end
+        end
+        return false
+    end
+    -- A full wardrobe can contain thousands of appearances. Resolve names
+    -- incrementally only when search or alphabetical sorting needs them.
+    -- Never invoke source lookups for thousands of records on a text-change frame.
+    local function ScheduleTransmogNameIndex(catalog,s,sortMode,needle)
+        if needle=='' and sortMode=='game' then return end
+        if not (C_Timer and type(C_Timer.After)=='function') then return end
+        local scope=tostring(s.transmogCategory)..':'..tostring(AF:GetCollectionTransmogClassChoice())
+            ..':'..tostring(s.visibility)..':'..tostring(s.revealAll)
+        local job=page._transmogNameIndexJob
+        if not job or job.scope~=scope then
+            local queue={}
+            for _,entry in ipairs(catalog) do
+                if AF:ShouldShowCollectionEntry(entry) and
+                    (entry.owned or AF:CollectionDiscovery('transmog',entry.id) or s.revealAll) then
+                    queue[#queue+1]={id=entry.id,categoryID=entry.categoryID}
+                end
+            end
+            job={scope=scope,queue=queue,next=1,scheduled=false,done=false}
+            page._transmogNameIndexJob=job
+        end
+        if job.done or job.scheduled then return end
+        local function step()
+            if page._transmogNameIndexJob~=job then return end
+            job.scheduled=false
+            if not page:IsShown() or AF.db.collections.settings.category~='transmog' then return end
+            local currentSort=AF.db.collections.settings.transmogSort or 'game'
+            if (search:GetText() or '')=='' and currentSort=='game' then return end
+            local count=0
+            while count<35 and job.next<=#job.queue do
+                local row=job.queue[job.next];job.next=job.next+1;count=count+1
+                local key=tostring(row.categoryID)..':'..tostring(row.id)
+                if not transmogCache[key] then
+                    page:ResolveTransmog({id=row.id,category='transmog',categoryID=row.categoryID,
+                        name='Appearance #'..row.id})
+                end
+            end
+            job.done=job.next>#job.queue
+            if not job.done then
+                job.scheduled=true
+                C_Timer.After(0.03,step)
+            end
+            -- The next callback is scheduled BEFORE refreshing so Refresh
+            -- cannot accidentally start a duplicate worker.
+            if page:IsShown() and (job.done or (job.next-1)%140<35) then page:Refresh() end
+        end
+        job.scheduled=true
+        C_Timer.After(0.03,step)
     end
     -- Strong contrast on light parchment: data and provenance stay distinct.
     -- The section layout intentionally uses one measured, scrollable FontString
@@ -2340,10 +2661,26 @@ function UI:BuildCollections(page)
             if tonumber(id)==cls then displayName=name end
         end
         classButton.label:SetText('Class: '..tostring(displayName or ('#'..tostring(cls or '?'))) ..' v')
-        local slotID=math.max(1,math.min(29,tonumber(s.transmogCategory) or 1))
-        mogControl.label:SetText('Slot: '..SlotLabel(slotID)..'  v')
-        for id,button in ipairs(slotButtons) do
-            button.label:SetText((id==slotID and '> ' or '')..SlotLabel(id))
+        local slotID=tonumber(s.transmogCategory) or 1
+        if slotID~=-1 and (slotID<0 or slotID>29) then slotID=1 end
+        local function ChosenSlotName(id)
+            return id==0 and 'All Slots' or (id==-1 and 'All Armor' or SlotLabel(id))
+        end
+        mogControl.label:SetText('Slot: '..ChosenSlotName(slotID)..'  v')
+        for id,button in pairs(slotButtons) do
+            button.label:SetText((id==slotID and '> ' or '')..ChosenSlotName(id))
+        end
+        local sortMode=s.transmogSort
+        if sortMode~='az' and sortMode~='za' then sortMode='game' end
+        sortButton.label:SetText('Sort: '..sortNames[sortMode]..'  v')
+        sortButton:SetShown(category=='transmog')
+        if category~='transmog' then sortMenu:Hide() end
+        -- Changing category moves both panels beneath the second toolbar.
+        -- Guard the layout update: SetPoint can fire OnSizeChanged/Refresh.
+        local topOffset=category=='transmog' and -84 or -51
+        if page._collectionTopOffset~=topOffset then
+            page._collectionTopOffset=topOffset
+            SetDetailWidth(detailWidth)
         end
         modelCards.label:SetText(page.experimentalCardModels and '3D hover: ON' or '3D hover: OFF')
         displayAll.label:SetText(page.allModelCards and '3D all: ON' or '3D all: OFF')
@@ -2369,12 +2706,38 @@ function UI:BuildCollections(page)
         for _,e in ipairs(catalog) do
             local observed=AF:CollectionDiscovery(category,e.id)
             if e.owned or observed then knownCount=knownCount+1 end
-            -- Applies to Collected, My Discoveries and Reveal All. A personally
-            -- seen mount always survives, even if the client's hidden flag is set.
             if not AF:ShouldShowCollectionEntry(e) then hiddenWithoutSource=hiddenWithoutSource+1 end
-            if AF:ShouldShowCollectionEntry(e) and (e.owned or observed or s.revealAll)
-                and (needle=='' or string.find(string.lower(e.name or ''),needle,1,true) or tostring(e.id)==needle) then
-                visible[#visible+1]=e
+            if AF:ShouldShowCollectionEntry(e) and (e.owned or observed or s.revealAll) then
+                if category=='transmog' then
+                    local key=tostring(e.categoryID)..':'..tostring(e.id)
+                    if transmogCache[key] then page:ResolveTransmog(e) end
+                end
+                local matched=category=='transmog' and TransmogSearchMatch(e,needle)
+                    or (needle=='' or string.find(string.lower(e.name or ''),needle,1,true) or tostring(e.id)==needle)
+                if matched then visible[#visible+1]=e end
+            end
+        end
+        if category=='transmog' then
+            ScheduleTransmogNameIndex(catalog,s,sortMode,needle)
+            if sortMode~='game' then
+                table.sort(visible,function(a,b)
+                    -- Unresolved Appearance #IDs go after properly named gear.
+                    local ak,bk=a.name or '',b.name or ''
+                    local aKnown=not ak:match('^Appearance #%d+$')
+                    local bKnown=not bk:match('^Appearance #%d+$')
+                    if aKnown~=bKnown then return aKnown end
+                    ak,bk=ak:lower(),bk:lower()
+                    -- Never emulate a ternary with `and ... or ...` here:
+                    -- for A-Z, a false `ak<bk` otherwise falls through to
+                    -- `ak>bk`, making both comparator directions true.
+                    if ak~=bk then
+                        if sortMode=='az' then return ak<bk end
+                        return ak>bk
+                    end
+                    local ac,bc=tonumber(a.categoryID) or 99,tonumber(b.categoryID) or 99
+                    if ac~=bc then return ac<bc end
+                    return a.id<b.id
+                end)
             end
         end
         -- Empty discovery categories use an explanatory text state, not fake
@@ -2391,7 +2754,10 @@ function UI:BuildCollections(page)
         nextB:SetEnabled(page.pageNumber<pagesNeeded)
         -- A zero-data view should teach discovery without misleading cards.
         if #visible==0 then
-            if s.revealAll then
+            local searchJob=category=='transmog' and page._transmogNameIndexJob or nil
+            if searchJob and not searchJob.done and needle~='' then
+                emptyMessage:SetText('Searching wardrobe appearance names...\nFoundry is indexing the available items in small batches.\nThis may take a moment for All Slots.')
+            elseif s.revealAll then
                 emptyMessage:SetText('No '..category..' entries available in this catalog view.\nTry another class or slot, or check client catalog coverage.')
             elseif s.visibility=='collected' then
                 emptyMessage:SetText('No collected '..category..' recorded yet.\nTry My Discoveries to review observed but unowned collectibles.')
@@ -2441,6 +2807,10 @@ function UI:BuildCollections(page)
         if category=='transmog' then
             local chosen=AF:GetCollectionTransmogClassChoice()
             baseStatus=baseStatus..' | class: '..tostring(classNames[chosen] or chosen)
+            local job=page._transmogNameIndexJob
+            if job and not job.done and (needle~='' or sortMode~='game') then
+                baseStatus=baseStatus..' | indexing names: '..tostring(job.next-1)..'/'..tostring(#job.queue)
+            end
             local diag=AF.collectionClassDiagnostics
             if diag then baseStatus=baseStatus..' | class check: '..diag.method..' ('..tostring(diag.valid)..'/'..tostring(diag.scanned)..')' end
             if chosen~=nil and not (C_TransmogCollection and type(C_TransmogCollection.SetClassFilter)=='function') then

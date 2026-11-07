@@ -506,74 +506,83 @@ function AF:GetCollectionCatalog(cat)
             filtersExpanded=changed,reveal=reveal,error=not ok and tostring(err) or nil,
         }
     elseif cat=='transmog' and C_TransmogCollection then
-        -- Avoid synchronously enumerating every source of every appearance.
-        -- Category controls page through the currently selected 1..29 wardrobe family.
-        local category=tonumber(self.db.collections.settings.transmogCategory) or 1
-        category=math.max(1, math.min(29,category))
-        -- Forever's SetClassFilter(0) can resolve to the current class instead of
-        -- an all-class union. For All Classes, query each playable class and
-        -- deduplicate visualIDs; leave Blizzard's original class filter intact.
-        local chosen=self:GetCollectionTransmogClassChoice()
-        local getFilter=C_TransmogCollection.GetClassFilter
-        local setFilter=C_TransmogCollection.SetClassFilter
-        local listFn=C_TransmogCollection.GetCategoryAppearances
-        local original=Safe(getFilter)
-        local canSet=type(getFilter)=='function' and type(setFilter)=='function' and type(original)=='number'
-        local appearances={}
-        local classSourceFn=C_TransmogCollection.GetValidAppearanceSourcesForClass
-        local explicitClass=(type(chosen)=='number' and chosen>0 and type(classSourceFn)=='function')
-        local checked,matched=0,0
-        -- Cache class/source eligibility for the current UI session. This avoids
-        -- repeating hundreds of native lookups on every gallery refresh.
-        self.collectionClassEligibilityCache=self.collectionClassEligibilityCache or {}
-        local categoryCache=self.collectionClassEligibilityCache[category]
-        if not categoryCache then categoryCache={};self.collectionClassEligibilityCache[category]=categoryCache end
-        local classCache=categoryCache[chosen]
-        if not classCache then classCache={};categoryCache[chosen]=classCache end
-        -- The class filter applied to the *catalog* is not necessarily applied
-        -- to uncollected appearances by the Forever client. Validate every
-        -- appearance against an actual source for the selected class instead.
-        local function ValidForChosenClass(visualID)
-            if not explicitClass then return true end
-            checked=checked+1
-            local known=classCache[visualID]
-            if known~=nil then
-                if known then matched=matched+1 end
-                return known
-            end
-            local ok,sources=pcall(classSourceFn,visualID,chosen,category)
-            if not ok then ok,sources=pcall(classSourceFn,visualID,chosen) end
-            if not ok then
-                -- Client rejected the API call; do not falsely hide its data.
-                return true
-            end
-            local valid=type(sources)=='table' and #sources>0
-            classCache[visualID]=valid
-            if valid then matched=matched+1 end
-            return valid
+        -- The wardrobe API enumerates one equipment category at a time.
+        -- 0 = all categories, -1 = all armor categories, 1..29 = one slot.
+        -- Use the native uiOrder for Game Order; names are resolved lazily in
+        -- the UI so browsing never synchronously resolves thousands of items.
+        local selection=tonumber(self.db.collections.settings.transmogCategory) or 1
+        if selection~=-1 and (selection<0 or selection>29) then selection=1 end
+        local categories={}
+        if selection==0 or selection==-1 then
+            for id=1,(selection==-1 and 11 or 29) do categories[#categories+1]=id end
+        else
+            categories[1]=selection
         end
-        local function accumulate(rows)
-            if type(rows)~='table' then return end
-            for i=1,math.min(#rows,3500) do
-                local v=rows[i]
-                if type(v)=='table' then
-                    local id=tonumber(v.visualID)
-                    if id and (chosen==0 or ValidForChosenClass(id)) then
-                        add({id=id,name='Appearance #'..id,owned=v.isCollected,categoryID=category,
-                            icon='Interface\\Icons\\INV_Misc_QuestionMark'})
+        local chosen=self:GetCollectionTransmogClassChoice()
+        -- A multi-slot view would otherwise re-enumerate every category on
+        -- each search keystroke. Keep a session-only, time-limited base cache;
+        -- never persist catalog references or treat them as discoveries.
+        local cacheKey=tostring(selection)..':'..tostring(chosen)
+        local now=type(GetTime)=='function' and GetTime() or 0
+        self._transmogBaseCatalogCache=self._transmogBaseCatalogCache or {}
+        local memo=self._transmogBaseCatalogCache[cacheKey]
+        local fresh=memo and (now==0 or (now>=memo.time and now-memo.time<90))
+        if fresh then
+            for _,entry in ipairs(memo.entries) do
+                add({id=entry.id,name=entry.name,owned=entry.owned,
+                    categoryID=entry.categoryID,uiOrder=entry.uiOrder,icon=entry.icon})
+            end
+            self.collectionClassDiagnostics=memo.diagnostics
+        else
+            local getFilter=C_TransmogCollection.GetClassFilter
+            local setFilter=C_TransmogCollection.SetClassFilter
+            local listFn=C_TransmogCollection.GetCategoryAppearances
+            local original=Safe(getFilter)
+            local canSet=type(getFilter)=='function' and type(setFilter)=='function' and type(original)=='number'
+            local classSourceFn=C_TransmogCollection.GetValidAppearanceSourcesForClass
+            local explicitClass=(type(chosen)=='number' and chosen>0 and type(classSourceFn)=='function')
+            local checked,matched=0,0
+            self.collectionClassEligibilityCache=self.collectionClassEligibilityCache or {}
+            local function ValidForChosenClass(visualID,category)
+                if not explicitClass then return true end
+                checked=checked+1
+                local categoryCache=self.collectionClassEligibilityCache[category]
+                if not categoryCache then categoryCache={};self.collectionClassEligibilityCache[category]=categoryCache end
+                local classCache=categoryCache[chosen]
+                if not classCache then classCache={};categoryCache[chosen]=classCache end
+                local known=classCache[visualID]
+                if known~=nil then
+                    if known then matched=matched+1 end
+                    return known
+                end
+                local ok,sources=pcall(classSourceFn,visualID,chosen,category)
+                if not ok then ok,sources=pcall(classSourceFn,visualID,chosen) end
+                if not ok then return true end -- Never hide on unsupported APIs.
+                local valid=type(sources)=='table' and #sources>0
+                classCache[visualID]=valid
+                if valid then matched=matched+1 end
+                return valid
+            end
+            local function accumulate(rows,category)
+                if type(rows)~='table' then return end
+                for i=1,math.min(#rows,3500) do
+                    local v=rows[i]
+                    if type(v)=='table' then
+                        local id=tonumber(v.visualID)
+                        if id and (chosen==0 or ValidForChosenClass(id,category)) then
+                            add({id=id,name='Appearance #'..id,owned=v.isCollected,
+                                categoryID=category,uiOrder=tonumber(v.uiOrder) or i,
+                                icon='Interface\\Icons\\INV_Misc_QuestionMark'})
+                        end
                     end
                 end
             end
-        end
-        if canSet and type(chosen)=='number' then
-            if chosen==0 then
-                -- Enumerate playable class IDs instead of assuming the native
-                -- filter recognizes 0 as an unfiltered view. Querying per class
-                -- respects the client's category/proficiency rules.
-                local ids,known={},{}
+            local classIDs={}
+            if canSet and chosen==0 then
+                local known={}
                 local function addClass(id)
                     id=tonumber(id)
-                    if id and id>0 and not known[id] then known[id]=true;ids[#ids+1]=id end
+                    if id and id>0 and not known[id] then known[id]=true;classIDs[#classIDs+1]=id end
                 end
                 local count=tonumber(Safe(GetNumClasses)) or 0
                 if type(GetClassInfo)=='function' then
@@ -582,40 +591,42 @@ function AF:GetCollectionCatalog(cat)
                         if type(name)=='string' then addClass(id) end
                     end
                 end
-                if #ids==0 and C_CreatureInfo and type(C_CreatureInfo.GetClassInfo)=='function' then
+                if #classIDs==0 and C_CreatureInfo and type(C_CreatureInfo.GetClassInfo)=='function' then
                     for id=1,13 do
                         local info=Safe(C_CreatureInfo.GetClassInfo,id)
                         if type(info)=='table' and type(info.className)=='string' then addClass(id) end
                     end
                 end
-                if #ids==0 then
-                    -- Core vanilla class IDs; only used if no enumeration API
-                    -- exists in a particular beta build.
-                    for _,id in ipairs({1,2,3,4,5,7,8,9,11}) do addClass(id) end
-                end
-                -- Include the existing native view in case the current client
-                -- exposes a nonstandard class or race-specific entry.
-                accumulate(Safe(listFn,category))
-                for _,id in ipairs(ids) do
-                    if pcall(setFilter,id) then accumulate(Safe(listFn,category)) end
-                end
-            else
-                if pcall(setFilter,chosen) then
-                    accumulate(Safe(listFn,category))
+                if #classIDs==0 then for _,id in ipairs({1,2,3,4,5,7,8,9,11}) do addClass(id) end end
+            end
+            for _,category in ipairs(categories) do
+                if canSet and chosen==0 then
+                    accumulate(Safe(listFn,category),category)
+                    for _,id in ipairs(classIDs) do
+                        if pcall(setFilter,id) then accumulate(Safe(listFn,category),category) end
+                    end
+                elseif canSet and type(chosen)=='number' and chosen>0 then
+                    pcall(setFilter,chosen)
+                    accumulate(Safe(listFn,category),category)
                 else
-                    accumulate(Safe(listFn,category))
+                    accumulate(Safe(listFn,category),category)
                 end
             end
-            -- Always restore, even when an individual lookup failed.
-            pcall(setFilter,original)
-        else
-            accumulate(Safe(listFn,category))
+            if canSet then pcall(setFilter,original) end
+            local diagnostics={selected=chosen,scanned=checked,valid=matched,
+                method=explicitClass and 'GetValidAppearanceSourcesForClass' or
+                    (chosen==0 and 'per-class catalog union' or 'native-only'),
+                nativeClassFilter=canSet}
+            self.collectionClassDiagnostics=diagnostics
+            local entries={}
+            for _,entry in ipairs(result) do
+                entries[#entries+1]={id=entry.id,name=entry.name,owned=entry.owned,
+                    categoryID=entry.categoryID,uiOrder=entry.uiOrder,icon=entry.icon}
+            end
+            -- Bound cache entries by active filter and expiration. A wardrobe
+            -- change event invalidates these results through the UI listener.
+            self._transmogBaseCatalogCache={[cacheKey]={entries=entries,time=now,diagnostics=diagnostics}}
         end
-        self.collectionClassDiagnostics={
-            selected=chosen, scanned=checked, valid=matched,
-            method=explicitClass and 'GetValidAppearanceSourcesForClass' or (chosen==0 and 'per-class catalog union' or 'native-only'),
-            nativeClassFilter=canSet,
-        }
     end
     -- Saved observations may be browsed even if the client's current filters hide them.
     local c=self:CollectionsStore()
@@ -646,10 +657,21 @@ function AF:GetCollectionCatalog(cat)
             end
         end
     end
-    table.sort(result,function(a,b)
-        local an,bn=string.lower(a.name or ''),string.lower(b.name or '')
-        return an==bn and a.id<b.id or an<bn
-    end)
+    if cat=='transmog' then
+        -- Native wardrobe order is stable even while item names load.
+        table.sort(result,function(a,b)
+            local ac,bc=tonumber(a.categoryID) or 99,tonumber(b.categoryID) or 99
+            if ac~=bc then return ac<bc end
+            local ao,bo=tonumber(a.uiOrder) or 999999,tonumber(b.uiOrder) or 999999
+            if ao~=bo then return ao<bo end
+            return a.id<b.id
+        end)
+    else
+        table.sort(result,function(a,b)
+            local an,bn=string.lower(a.name or ''),string.lower(b.name or '')
+            return an==bn and a.id<b.id or an<bn
+        end)
+    end
     return result
 end
 
