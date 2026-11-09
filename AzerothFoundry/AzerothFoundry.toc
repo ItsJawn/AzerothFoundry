@@ -2,9 +2,9 @@
 ## Title: Azeroth Foundry
 ## Notes: Your Adventurer's Journal for World of Warcraft: Forever.
 ## Author: Azeroth Foundry
-## Version: 1.0.28
+## Version: 1.0.30
 ## SavedVariables: AzerothFoundryDB
-## OptionalDeps: ProfessionDB, ItemDB, QuestDB
+## OptionalDeps: ProfessionDB, ItemDB, QuestDB, Auctionator
 
 Core.lua
 Compatibility.lua
@@ -34,6 +34,9 @@ Items.lua
 Inventory.lua
 Crafting.lua
 CraftingQueue.lua
+TrainingPlanner.lua
+TrainingGuide.lua
+TrainingMaterials.lua
 GuidedGoals.lua
 ExplorationGoals.lua
 Collections.lua
@@ -59,6 +62,9 @@ UI/LivingWorkshop.lua
 UI/ProfessionDepth.lua
 UI/MaterialsWorkbench.lua
 UI/CraftingPlanner.lua
+UI/TrainingPlanner.lua
+TrainingGuide.lua
+TrainingMaterials.lua
 
 UI/GoalJournal.lua
 UI/GoalNotifications.lua

@@ -1847,6 +1847,36 @@ function AF:ObserveQueuedCraftResult(data)
             end
         end
     end
+    -- Training Guide's Craft 1 / Craft All uses an intentionally TRANSIENT
+    -- project, not a saved queue entry. The generic fallback below normally
+    -- credits the first queued recipe with matching output -- that would
+    -- incorrectly advance a real queue item when Training crafted it. Match
+    -- this explicit player-clicked training request to its output and consume
+    -- those result events without crediting unrelated queue projects.
+    local trainingRequest=self.lastQueueCraftRequest
+    if trainingRequest and type(trainingRequest.projectID)=='string' and
+        trainingRequest.projectID:match('^training%-milestone%-') then
+        local age=Now()-(tonumber(trainingRequest.at) or 0)
+        if age>=0 and age<=90 and trainingRequest.status~='training_crafted' and
+            trainingRequest.status~='rejected' and trainingRequest.status~='blocked' and
+            trainingRequest.status~='cast_failed' then
+            local snapshot,record=self:FindQueueRecipe({owner=current,
+                crafting={recipeID=trainingRequest.recipeID}})
+            local detail=snapshot and record and self:GetRecipeDetails(snapshot,record)
+            if detail and tonumber(detail.outputItemID)==itemID then
+                local yield=math.max(1,tonumber(detail.quantityMin) or 1)
+                local made=quantity/yield
+                if made>=1 and made==math.floor(made) then
+                    trainingRequest.observed=(tonumber(trainingRequest.observed) or 0)+made
+                    trainingRequest.lastEvent='TRADE_SKILL_ITEM_CRAFTED_RESULT (training craft)'
+                    if trainingRequest.observed>=(tonumber(trainingRequest.amount) or 1) then
+                        trainingRequest.status='training_crafted'
+                    end
+                end
+                return false
+            end
+        end
+    end
     -- When two queue entries produce the same item, the most recent
     -- user-clicked craft request identifies which entry should advance.
     -- Preserve the old queue-order fallback for ordinary native crafts that

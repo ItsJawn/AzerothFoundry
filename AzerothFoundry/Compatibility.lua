@@ -15,7 +15,10 @@ function compat.GetClient()
     local interface = GetInterface()
     local mainline = WOW_PROJECT_ID ~= nil and WOW_PROJECT_MAINLINE ~= nil
         and WOW_PROJECT_ID == WOW_PROJECT_MAINLINE
-    if mainline and interface == 16001 then return 'Forever', interface end
+    -- Forever reports Interface 16001 but does not have to identify itself
+    -- as WOW_PROJECT_MAINLINE. The interface is unambiguous; don't let a
+    -- different project constant downgrade it to Unknown.
+    if interface == 16001 then return 'Forever', interface end
     if mainline and interface and interface >= 100000 then return 'Retail', interface end
     return 'Unknown', interface
 end
@@ -62,9 +65,11 @@ function compat.GetDependency(name)
     local present = AddOnPresent(name)
     local lib = SafeLib(libname)
     if lib then
-        if name == 'ProfessionDB' and AF.GetProfessionReference
-            and not AF:GetProfessionReference() then
-            return {state='unavailable', label='installed; no compatible reference ready', library=libname}
+        if name == 'ProfessionDB' and AF.GetProfessionReferenceStatus then
+            local ready, reason = AF:GetProfessionReferenceStatus()
+            if not ready then
+                return {state='unavailable', label=reason or 'reference unavailable', library=libname}
+            end
         end
         if type(lib.IsReady) == 'function' then
             local ok, ready = pcall(lib.IsReady, lib)

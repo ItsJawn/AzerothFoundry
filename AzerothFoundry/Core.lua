@@ -1,7 +1,7 @@
 -- Azeroth Foundry: bootstrap and account-wide data (WoW: Forever / Interface 16001)
 local ADDON_NAME, AF = ...
 AF.name = ADDON_NAME
-AF.version = "1.0.28"
+AF.version = "1.0.29.10"
 AF.events = CreateFrame("Frame")
 
 local function Print(message)
@@ -63,7 +63,7 @@ function AF:InitializeDatabase()
     elseif db.settings.page == "Projects" then
         db.settings.page = "Goals"
     end
-    local allowedTabs = {Professions=true, Recipes=true, ["Crafting Queue"]=true, Materials=true}
+    local allowedTabs = {Professions=true, Training=true, Recipes=true, ["Crafting Queue"]=true, Materials=true}
     if not allowedTabs[db.settings.workshopTab] then db.settings.workshopTab="Professions" end
     db.sequence = tonumber(db.sequence) or 0
     if self.InitializeExpeditions then self:InitializeExpeditions() end
@@ -661,6 +661,8 @@ SlashCmdList.AZEROTHFOUNDRY = function(arg)
             AF.UI:Open("Workshop")
         elseif command == "recipes" then
             AF.UI:Open("Recipes")
+        elseif command == "training" or command == "trainer" then
+            AF.UI:Open("Training")
         elseif command == "queue" or command == "crafting" then
             AF.UI:Open("Crafting Queue")
         elseif command == "materials" then

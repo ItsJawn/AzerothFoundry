@@ -29,34 +29,61 @@ end
 
 -- ProfessionDB is optional. Missing library data never blocks native recipe scans.
 -- No library data is copied into SavedVariables; the library owns its own data.
-function AF:GetProfessionReference()
-    -- LibStub is normally a TABLE with a __call metamethod, not a function.
-    -- Use its documented GetLibrary method; function-style test doubles are
-    -- accepted as a fallback without assuming the real global has that type.
-    local stub = LibStub
-    local ok, lib
-    if type(stub) == 'table' and type(stub.GetLibrary) == 'function' then
-        ok, lib = pcall(stub.GetLibrary, stub, 'LibProfessionDB-1.0', true)
-    elseif type(stub) == 'function' then
-        ok, lib = pcall(stub, 'LibProfessionDB-1.0', true)
-    else
-        return nil
+-- Report exactly why an optional reference is unavailable. A loaded addon,
+-- a registered LibStub library, and game-correct loaded data are distinct.
+-- Do not use Vanilla data on Forever just because its library responds.
+function AF:GetProfessionReferenceStatus()
+    local stub=LibStub
+    local ok,lib
+    if type(stub)=='table' and type(stub.GetLibrary)=='function' then
+        ok,lib=pcall(stub.GetLibrary,stub,'LibProfessionDB-1.0',true)
+    elseif type(stub)=='function' then
+        ok,lib=pcall(stub,'LibProfessionDB-1.0',true)
     end
-    if not ok or not lib or type(lib.IsReady) ~= 'function' then return nil end
-    local ready = Safe(lib.IsReady, lib)
-    if not ready then return nil end
-    if type(lib.GetGameVersion) == 'function' then
-        local game = Safe(lib.GetGameVersion, lib)
-        if type(game) == 'string' then
-            local family = self.Compatibility and self.Compatibility.GetClient()
-                or 'Forever'
-            local reported = game:lower()
-            local accepted = family == 'Retail' and (reported == 'retail' or reported == 'mainline')
-                or family == 'Forever' and (reported == 'forever' or reported == 'camelot')
-            if not accepted then return nil end
+    if not ok or type(lib)~='table' then
+        local api=C_AddOns
+        local isLoaded=(api and api.IsAddOnLoaded) or IsAddOnLoaded
+        local loaded=type(isLoaded)=='function' and Safe(isLoaded,'ProfessionDB')
+        if loaded then
+            return false,'ProfessionDB loaded, but LibProfessionDB-1.0 is not registered.'
         end
+        return false,'ProfessionDB not loaded. Enable the Forever version and reload.'
     end
-    return lib
+    if type(lib.IsReady)~='function' then
+        return false,'ProfessionDB library is outdated or incompatible; update it.'
+    end
+    local ready=Safe(lib.IsReady,lib)
+    if not ready then
+        return false,'ProfessionDB loaded, but its recipe data is not ready.'
+    end
+    local family=self.Compatibility and type(self.Compatibility.GetClient)=='function'
+        and self.Compatibility.GetClient() or 'Unknown'
+    -- Secondary validation: different WoW project constants must not make
+    -- the real Forever 16001 client appear incompatible.
+    if family=='Unknown' and type(GetBuildInfo)=='function' then
+        local interface=Safe(function() return select(4,GetBuildInfo()) end)
+        if tonumber(interface)==16001 then family='Forever' end
+    end
+    local version=type(lib.GetGameVersion)=='function' and Safe(lib.GetGameVersion,lib) or nil
+    if version==nil then
+        return false,'ProfessionDB has no game-version report; update to its Forever release.'
+    end
+    local reported=type(version)=='string' and version:lower() or ''
+    if family=='Forever' and reported~='forever' and reported~='camelot' then
+        return false,'ProfessionDB data is '..tostring(version)..'; install/enable its Forever build.'
+    end
+    if family=='Retail' and reported~='retail' and reported~='mainline' then
+        return false,'ProfessionDB data is '..tostring(version)..'; install/enable its Retail build.'
+    end
+    if family=='Unknown' then
+        return false,'Cannot verify client flavour against ProfessionDB '..tostring(version)..'.'
+    end
+    return true,'Ready ('..tostring(version)..')',lib
+end
+
+function AF:GetProfessionReference()
+    local ready,_,lib=self:GetProfessionReferenceStatus()
+    return ready and lib or nil
 end
 
 -- The Forever profession APIs may omit schematic reagent details for some
@@ -121,7 +148,17 @@ function AF:GetRecipeDetails(snapshot, record)
         result.outputItemID = result.outputItemID or Number(ref.craftedItemId) or Number(ref.craftedItemID)
 
         result.requiredSkill = result.requiredSkill or Number(ref.requiredSkill)
-        result.reagents = result.reagents or CopyReagents(ref.reagents)
+        local dbReagents=CopyReagents(ref.reagents)
+        if result.reagentsIncomplete==true and dbReagents then
+            -- A native schematic may leave an optional/alternate slot
+            -- unresolved. Prefer ProfessionDB's complete static reagent
+            -- definition for PLANNING, while keeping the snapshot intact.
+            result.reagents=dbReagents
+            result.reagentsIncomplete=false
+            result.referenceReagentsFallback=true
+        else
+            result.reagents = result.reagents or dbReagents
+        end
         result.referenceAvailable = true
         result.effect = ref.effect
     end
@@ -421,6 +458,9 @@ function AF:ScanOpenRecipes(silent)
     end
     local key = self:GetCurrentKey()
     if not self.db.characters[key] then return false, 'Character not registered.' end
+    local ownerProfile=self.db.characters[key] and self.db.characters[key].professions
+    ownerProfile=ownerProfile and ownerProfile[info.professionName]
+    local scanSkill=tonumber(info.skillLevel) or tonumber(ownerProfile and ownerProfile.skill)
     local byID = {}
     local learned, missing, failed = 0, 0, 0
     for _, id in ipairs(ids) do
@@ -432,6 +472,7 @@ function AF:ScanOpenRecipes(silent)
                     -- for the *scanning character at scan time*. Never infer
                     -- a different alt's current skill-up chance from it.
                     relativeDifficulty=Number(r.relativeDifficulty),
+                    scannedSkill=scanSkill,
                     numSkillUps=Number(r.numSkillUps),
                     canSkillUp=r.canSkillUp,
                     recipeLink=type(r.hyperlink)=='string' and r.hyperlink or nil}
@@ -489,6 +530,7 @@ function AF:ScanOpenRecipes(silent)
         professionID=info.professionID,
         professionName=info.professionName,
         scanned=Now(),
+        skillAtScan=scanSkill,
         learned=learned,
         unlearned=missing,
         recipes=byID,

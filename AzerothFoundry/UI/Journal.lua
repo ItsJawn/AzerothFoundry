@@ -22,6 +22,7 @@ local NAV_TREES = {
         setting = "workshopTreeExpanded",
         children = {
             {name="Professions", icon="Interface\\Icons\\Trade_BlackSmithing"},
+            {name="Training", icon="Interface\\Icons\\INV_Misc_Note_04"},
             {name="Recipes", icon="Interface\\Icons\\INV_Misc_Book_09"},
             {name="Crafting Queue", icon="Interface\\Icons\\INV_Gizmo_02"},
             {name="Materials", icon="Interface\\Icons\\INV_Misc_Bag_10"},
@@ -499,6 +500,18 @@ function UI:Initialize()
                     -- the separate Craft button is clicked. No crafting is
                     -- initiated here, and slash-command/UI refresh routes
                     -- do not silently attempt protected profession actions.
+                    if child.name=='Training' and AF.PrepareWorkshopProfessionForScan then
+                        local current=AF:GetCurrentKey()
+                        local owner=UI.trainingOwner or UI.workshopSelectedCharacter
+                        local profession=UI.trainingProfession or UI.workshopSelectedProfession
+                        if owner==current and profession then
+                            local ok,msg=AF:PrepareWorkshopProfessionForScan(profession,owner)
+                            UI.trainingMessage=msg
+                            local workshop=UI.pageViews and UI.pageViews['Living Workshop']
+                            local training=workshop and workshop.subViews and workshop.subViews['Training']
+                            if training and training.Refresh then training:Refresh(true) end
+                        end
+                    end
                     if child.name=='Crafting Queue' and AF.PrepareQueuedCraftOnSelection then
                         local project=AF:FindRecord(AF:GetCraftingQueueProjects(),UI.workshopQueueSelected)
                         if project then
@@ -652,7 +665,7 @@ function UI:Switch(name)
         name="Settings"
     end
     -- Compatibility routes preserve the older /af commands and existing links.
-    local destination = {Professions="Professions", Recipes="Recipes",
+    local destination = {Professions="Professions", Training="Training", Recipes="Recipes",
         Projects="Goals", ["Crafting Queue"]="Crafting Queue", Materials="Materials"}
     if name == "Workshop" then name = "Living Workshop" end
     local subpage = destination[name]
@@ -793,6 +806,23 @@ function UI:Open(page)
     if page then self:Switch(page) end
     self.frame:Show()
     self.frame:Raise()
+    -- Opening the journal from the minimap or another player-clicked opener
+    -- does not fire a Training-tab click. Prepare its concealed profession on
+    -- this SAME hardware click, after the selected training page is known.
+    -- Never attempt OpenTradeSkill from a passive OnShow/timer/update.
+    if self.currentPage=='Living Workshop' and AF.db and AF.db.settings and
+        AF.db.settings.workshopTab=='Training' and AF.PrepareWorkshopProfessionForScan then
+        local owner=self.trainingOwner or self.workshopSelectedCharacter
+        local prof=self.trainingProfession or self.workshopSelectedProfession
+        if owner and prof and owner==AF:GetCurrentKey() then
+            local ok,msg=AF:PrepareWorkshopProfessionForScan(prof,owner)
+            self.trainingMessage=msg
+            local workshop=self.pageViews and self.pageViews['Living Workshop']
+            local training=workshop and workshop.subViews and workshop.subViews['Training']
+            if training and training.Refresh then training:Refresh(true) end
+            if ok==false and AF.Print and msg then AF.Print(msg) end
+        end
+    end
     if page=="Self-Found" then self:TryShowSelfFoundInitiation() end
     -- The optional first-run tour appears only on an ordinary journal open,
     -- never over the new-character Expedition invitation (which supplies page).

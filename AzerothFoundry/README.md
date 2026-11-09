@@ -1,4 +1,4 @@
-# Azeroth Foundry — v1.0.28 (Forever test build)
+# Azeroth Foundry — v1.0.30 (Workshop Training Guides)
 
 *Your Adventurer's Journal*
 
@@ -12,6 +12,21 @@ Azeroth Foundry is a locally saved, account-wide adventurer's journal for **Worl
 4. When updating from an older test version, replace the *entire* `Interface/AddOns/AzerothFoundry` folder so deleted legacy texture files do not linger. **Do not delete your `WTF` folder** or SavedVariables.
 
 This release targets the Forever 1.60.1 interface (`16001`). If the client updates its interface version, the manifest may need to change; interface-number compatibility alone does not certify gameplay APIs.
+
+## v1.0.30 — Training Guide Release
+
+- Training Guides now cover **Alchemy, Blacksmithing, Enchanting, Engineering, Leatherworking, Tailoring, Cooking, and First Aid** from skill **1–225**. The new guides build on the tested Leatherworking UI and use the same native profession scanning, inventory/material calculations, Auctionator estimates, Focus/Overview navigation, optional learned-recipe alternatives, crafting buttons, cast progress, and milestone celebrations.
+- Training is for craft-levelable professions. Gathering professions are managed from the regular Professions page; no recipe-based Mining, Herbalism, Skinning or Fishing paths are invented.
+- Vendor formulas, skill books and manuals are labeled on their affected guide steps. The reference data is not a guarantee that a specific trainer offers each recipe. Unlearned or unverified steps are never automatically treated as ready to craft.
+- Guide rows are estimates that need additional live testing; 225–300 is not yet included. For detailed release notes see `CHANGELOG.md` and for research provenance see `TRAINING_GUIDE_REFERENCES.txt`.
+
+## Training features introduced since v1.0.28
+
+- Training's focused recipe now retains its cast-progress UI references across no-op refreshes, uses Crafting Queue's actual `GetWorkshopCraftCastProgress()` timing, and displays a pending-craft status when timing is not exposed.
+- Re-entering the previously active Training page via a clickable Foundry opener attempts the native background profession scan. Training navigation, Focus Current Step, profession selection, and the manual Scan button are also real click paths. Protected OpenTradeSkill cannot be guaranteed from an automatic page-show, slash command, or timer; if the client blocks it, click Scan.
+- Wheel zoom adjusts by 5% per notch with eased interpolation. Focus uses its own zoom and never exits to Overview from wheel zoom.
+- A real recorded skill increase across a training milestone closes the focused step and then returns to Overview with a Darkmoon-style visual celebration. Optional Blizzard-installed sound cues respect the Fanfare setting; no audio or artwork is bundled.
+- The existing crafting, queue safety, and curated Leatherworking guide logic are unchanged.
 
 ## Main features
 
@@ -30,17 +45,59 @@ Data is stored locally in WoW SavedVariables. Inventory snapshots and quest obse
 
 ## Optional reference integrations
 
-ProfessionDB, ItemDB and QuestDB are optional dependencies. Foundry should load without them, but offline catalog and source information may be less complete. These libraries are *not* distributed in this ZIP.
+ProfessionDB, ItemDB, QuestDB and Auctionator are optional dependencies. Foundry should load without them, but offline catalog and source information may be less complete. These dependencies are *not* distributed in this ZIP. The Training Planner requires LibProfessionDB for a multi-skill route; Auctionator supplies optional recorded material prices.
 
 ## Useful slash commands
 
 - `/af` — open or close the journal
 - `/af guide` — Adventurer's Guide
 - `/af theme` — theme settings
-- `/af recipes`, `/af queue`, `/af materials` — Workshop
+- `/af recipes`, `/af training`, `/af queue`, `/af materials` — Workshop
 - `/af goals`, `/af notes`, `/af atlas` — journal sections
 - `/af navstatus` — city guard navigation diagnostics
 - `/af deps`, `/af craftstatus` — dependency and crafting diagnostics
+
+## Test changes — v1.0.29.4
+
+- **Unlearned trainer-exclusive recipes:** With Forever LibProfessionDB active, Training considers recipes from its offline catalogue even if the chosen character has not learned them. It only adds an unlearned recipe if its recorded source kinds show **trainer only** (no vendor, drop, quest, or container), its required learn-skill is known, its reagents and difficulty range are usable, and it is not hidden, auto-taught, or specialization-locked. Recipe data alone never proves actual trainer availability.
+- **Trainer recipes only toggle:** Optional persisted setting filters *all* training candidates to explicitly trainer-exclusive sources. OFF allows other recipes already learned by the character, but still never assumes an unlearned vendor/drop/quest recipe can be obtained at a trainer.
+- **Trainer breakpoints:** When the chosen route switches to an unlearned trainer recipe, a themed `VISIT <profession> TRAINER` notice shows the recipe and required profession skill. Hover provides recorded trainer NPC names when exposed. Borrowed Vanilla source/required-skill records are explicitly labeled **unconfirmed in Forever**.
+- **Training safety:** The route can display hypothetical steps through a trainer visit, but the **Queue Estimated Crafts** action remains unavailable until every recipe in the plan is actually learned and the route is recalculated; no automatic trainer or crafting action. Trainer learning fees are NOT yet included in gold optimization.
+- **Auction freshness:** Shows the last full AH scan timestamp where the installed Auctionator build exposes `AUCTIONATOR_LAST_SCAN_TIME`; otherwise reports that the precise scan date is unavailable and, if supported, derives a separately labeled approximate date from Auctionator's *per-item* quote ages. Never claims this observation date is the exact full scan date. Missing price-age APIs are handled gracefully.
+- **Existing features preserved:** Background profession scanning, goal drafts, priority for guaranteed orange skill-ups, material inventory netting, alternative branches, zoom, pan, theme engine, and original assets.
+- **Limitations:** The cheapest route is still a per-skill heuristic rather than a globally proven minimum. LibProfessionDB's Forever trainer-source information is often borrowed from Vanilla, and may not reflect the trainer's actual offerings. Confirm patterns in-game. AH prices are recorded quotes, not current availability. Live Forever testing needed.
+
+## Test changes — v1.0.29.3
+
+- Preserves unsaved target skill input; adds Orange Skill-ups ON/OFF, a reset control for alternatives, and a minimum practical expected skill-up probability to avoid recommending near-gray grinding as an efficient route.
+
+## Test changes — v1.0.29.2
+
+- **Probability curve:** Replaces the original blanket 65% yellow / 30% green assumption with the Classic community estimate `(gray threshold - current skill) / (gray threshold - yellow threshold)`, constrained to valid recipe skill ranges. Only orange is guaranteed. This is still a modeled skill-up expectation, **not** an observed/guaranteed Forever result. The difficulty thresholds come from a matching, verified LibProfessionDB recipe; unverified/placeholder thresholds are excluded.
+- **Fewer biased routes:** The recipe comparison now uses expected market cost per skill point. Saved inventory is credited to the final shopping list rather than causing the optimizer to choose an inferior recipe just because its ingredients are already owned. If a competing learned recipe has missing Auctionator quotes, the calculator falls back to fewer expected crafts for that step and reports that cheapest is unverified. Offline prices are not live market guarantees.
+- **Real grouped stages:** Adjacent skill steps using the same recipe are presented as one manufacturing stage, even though their skill-up probability changes as skill rises. Stages report the start-to-end modeled chance and aggregate craft count. Stops at the recorded skill cap and warns about low-chance skill ranges where newer trained recipes may be needed.
+- **Graph presentation:** Graph uses the Theme Studio `dataSurface` / `dataText` palette family. Recipe icons, item/reagent icons, visible inputs, accent borders and grid guides improve legibility; retains clickable alternative-recipe branches and material requirements.
+- **Stale-target safety:** When you edit the target (e.g. 150 to 127), the existing graph is marked outdated and queue export is disabled until the route is recalculated. This fixes the screenshot case where the left input said 127 but the displayed route still said 150.
+- **Pan/zoom:** Drag empty graph space to pan; mouse wheel or `+/-` buttons zoom 50–165%; the percentage button resets to 100%; Shift + wheel pans horizontally. Zoom is centered around the viewport center. Retains existing queue export and profession background scan behavior.
+- **User test needed:** Check layout/theme contrast, pan/zoom and real LibProfessionDB difficulty inputs in Forever. Revisit a trainer and rescan newly learned recipes before buying materials. Large predicted craft counts remain possible when only green/near-gray recipes are learned.
+
+## Test fixes — v1.0.29.1
+
+- **Forever library detection:** Recognizes interface `16001` without requiring a particular `WOW_PROJECT_ID`. This avoids incorrectly rejecting a ready LibProfessionDB library on a genuine Forever client. Never accepts a different game version's data in its place.
+- **Actionable database status:** Training now distinguishes a missing/not-loaded addon, an unregistered library, unloaded data, and the wrong game version. `/af deps` provides the same reason.
+- **Training profession selection:** Clicking a profession owned by the current character prepares Blizzard's native profession frame in the same quiet compact session used by the Professions/Recipes pages. The normal delayed recipe scan follows; it never crafts anything. Offline characters remain browse-only, and game combat restrictions still apply.
+- Saves, crafting outcomes and the Training Planner's calculation logic are unchanged in this fix. Blizzard-client validation is still required.
+
+## Test notes — v1.0.29 (Workshop Training Planner)
+
+- Added **Workshop > Training**, directly below Professions, with goal editing moved here. Existing per-character Training Goal records and linked Goals projects are preserved; Professions now links into this planner.
+- The first graph prototype lays out a horizontal skill route, reagent branches, a selectable alternative recipe where available, and trainer rank-cap breakpoints.
+- The original v1.0.29 prototype used only verified learned recipes. Starting v1.0.29.4, it additionally considers trainer-exclusive reference recipes with explicit learn requirements, marking Forever-unverified sources and withholding queue export until they are learned.
+- Optional **Auctionator** quotes are taken from its recorded item-price API. After scanning the Auction House, calculate again. Unpriced ingredients are always marked unknown, never free. “Cheapest” is a local expected-cost heuristic, not a provably globally optimal route; without prices, it falls back to a fewer-crafts estimate.
+- Yellow and green estimated skill chances are provisional (65% / 30%). All expected quantities and inventory balances are **planning estimates**, not guaranteed skill-ups or currently accessible stock.
+- Materials produced by earlier route steps are credited against ingredients required by later steps. This is a one-pass projection, not automatic sourcing of missing intermediate crafts.
+- **Save Goal** persists the old Training Goal. **Queue Estimated Crafts** asks for confirmation and appends batches in skill order (up to 99 crafts per entry). Queueing does not automatically craft, buy reagents, learn patterns or continue past a skill cap.
+- Initial prototype limits: unknown trainer offerings, recipe-source verification, material-buy-versus-subcraft graph choices, responsive re-planning from live skill gains, and vendor-price comparisons need later validation/implementation. Review every generated route before crafting.
 
 ## Release notes — v1.0.28 (quiet profession scanning and live crafting cast progress)
 
@@ -150,3 +207,13 @@ ProfessionDB, ItemDB and QuestDB are optional dependencies. Foundry should load 
 ## Earlier updates
 
 All previous fixes through v1.0.12 are included. See the CurseForge/GitHub changelog for earlier details. This remains a **TEST build** pending in-game verification of the latest changes.
+
+## Workshop / Training (v1.0.29.10 prototype)
+
+The curated Leatherworking trainer guide is the only Training view. Its upward-directed milestone graph shows the current step at the bottom and target toward the top. Scroll-wheel zoom switches from compact route cards with an exclamation mark for discovered alternatives to detailed cards. Drag empty canvas to pan. **Focus Current Step** isolates one stage and displays its ingredients, expected crafting count, trainer status, and learned alternatives. The arrows step between milestones; Overview returns to the full graph.
+
+The target skill is edited within the graph header using **Set Goal**, and the character/profession selector is at the top of the right-hand sidebar. The sidebar contains separate shopping lists and price estimates for the **total goal** and the **selected step**. Auctionator prices are only recorded quotes and may be missing or stale.
+
+Skill-up progress animates when Foundry records a profession skill change. Reaching a curated milestone produces a brief visual highlight and optional sound (**Fanfare: ON/OFF**); the first page open never plays a sound. Milestones do not count crafting XP: orange guarantees one skill point, yellow gives a chance, and green/gray are excluded from this curated guide. Queue export still requires learned, verified recipes and never crafts without a player action.
+
+Only Leatherworking 1–225 has curated coverage so far. Unsupported professions display a coverage message instead of silently falling back to the former speculative Personal Route. The guide is reference data and should be verified in Forever before shopping.

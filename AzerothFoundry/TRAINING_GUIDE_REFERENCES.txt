@@ -1,0 +1,45 @@
+AZEROTH FOUNDRY - CURATED TRAINING GUIDE REFERENCES
+v1.0.30 / WoW Forever Interface 16001 / 2026-11-09
+
+Coverage: reference milestones 1-225 for Alchemy, Blacksmithing, Enchanting,
+Engineering, Leatherworking, Tailoring, Cooking and First Aid.
+
+Guides are original, compact Foundry milestone tables, reviewed against public
+community skill-range and recipe-source references and intended for in-game
+Forever verification. No other addon's code, graphics, layouts, databases, or
+written descriptions are bundled or copied. Reference skill bands and craft
+counts are editorial estimates, not a claim of an optimal cost or guaranteed
+number of successful skill-ups.
+
+Reference URLs reviewed:
+  https://www.wow-professions.com/forever/alchemy-leveling-guide
+  https://www.wow-professions.com/forever/blacksmithing-leveling-guide
+  https://www.wow-professions.com/forever/enchanting-leveling-guide
+  https://www.wow-professions.com/forever/engineering-leveling-guide
+  https://www.wow-professions.com/forever/leatherworking-leveling-guide
+  https://www.wow-professions.com/forever/tailoring-leveling-guide
+  https://www.wow-professions.com/forever/cooking-leveling-guide
+  https://www.wow-professions.com/forever/first-aid-leveling-guide
+  https://www.wowhead.com/forever/classicplus-profession-leveling-guides-outro
+  https://www.60.tools/guides/professions
+  https://kovarel.com/wow-forever/professions
+
+Important limitations:
+- A reference step is not proof a character knows the recipe or a specific
+  Forever NPC teaches it. Live recipe records and ProfessionDB are required to
+  verify the unlock and accurate reagents; unconfirmed steps are flagged.
+- Vendor formulas, Expert books/manuals, special trainer rank requirements,
+  and workstations exist for some professions. These cannot be honestly
+  described as city-trainer-only routes. They have explicit acquisition notes.
+- Enchanting may need an item/target for a native enchant action; a guide
+  recommendation does not guarantee the quick-craft API can execute it.
+- Skill-up colors and craft counts are estimated when the client has not
+  observed the recipe at the required skill. Yellow crafts are not guaranteed.
+- Missing market prices, reagent detail and unavailable rank/recipe records
+  remain unknown rather than zero. AH prices are historical observations.
+- Profession rank caps and required player levels still apply.
+- No routes for gathering-based Mining/Herbalism/Skinning/Fishing are invented.
+- The scope is 1-225 only; the skill cap may be 300. Do not invent 225-300 steps.
+
+Please validate individual steps in the live Forever client before buying
+large quantities of materials or publishing definitive costs.

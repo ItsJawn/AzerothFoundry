@@ -4,7 +4,7 @@ local _, AF = ...
 local UI = AF.UI
 local P = UI.palette
 
-local TABS = {"Professions", "Recipes", "Crafting Queue", "Materials"}
+local TABS = {"Professions", "Training", "Recipes", "Crafting Queue", "Materials"}
 
 -- WoW protects CancelShapeshiftForm: it cannot be called from addon Lua.
 -- We instead present a secure cancelaura action directly over each Craft
@@ -775,7 +775,7 @@ function UI:BuildLivingWorkshop(page)
     local views={}
     page.subViews=views
     function page:Select(name)
-        local supported={Professions=true,Recipes=true,['Crafting Queue']=true,Materials=true}
+        local supported={Professions=true,Training=true,Recipes=true,['Crafting Queue']=true,Materials=true}
         if not supported[name] then name='Professions' end
         if name=='Materials' and AF.IsQueueCompactNativeProfession and
             AF:IsQueueCompactNativeProfession() then
@@ -789,6 +789,7 @@ function UI:BuildLivingWorkshop(page)
             view:SetAllPoints(body)
             views[name]=view
             if name=='Professions' then UI:BuildWorkshop(view)
+            elseif name=='Training' then UI:BuildTrainingPlanner(view)
             elseif name=='Recipes' then UI:BuildRecipes(view)
             elseif name=='Crafting Queue' then UI:BuildWorkshopQueue(view)
             else UI:BuildWorkshopMaterials(view) end

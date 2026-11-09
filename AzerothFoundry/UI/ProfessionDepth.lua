@@ -86,7 +86,7 @@ function UI:BuildWorkshop(page)
     local topHint=Msg(heading,'small',P.pale,16)
     topHint:SetPoint('TOPLEFT',heading,'TOPLEFT',12,-21)
     topHint:SetPoint('TOPRIGHT',heading,'TOPRIGHT',-12,-21)
-    topHint:SetText('Compare your registered crafters, inspect skill progress, and plan their next training goal.')
+    topHint:SetText('Compare registered crafters and inspect skill progress. Training Goals now live in Workshop / Training.')
     local topRule=heading:CreateTexture(nil,'BORDER')
     topRule:SetHeight(1)
     topRule:SetPoint('BOTTOMLEFT',heading,'BOTTOMLEFT',8,0)
@@ -605,6 +605,40 @@ function UI:BuildWorkshop(page)
         local p=AF:GetWorkshopGoalProject(goal)
         linked:SetShown(p~=nil)
         layoutCompactTraining()
+    end
+    -- v1.0.29: existing goal records stay untouched; editing has moved into
+    -- Workshop / Training. Keep the left-hand skill progress panel intact.
+    local trainingSummary=Msg(rightLower,'small',P.ink,77)
+    trainingSummary:SetPoint('TOPLEFT',rightLower,'TOPLEFT',3,-4)
+    trainingSummary:SetPoint('TOPRIGHT',rightLower,'TOPRIGHT',-8,-4)
+    trainingSummary:SetJustifyV('TOP')
+    local openTraining=B(rightLower,'Open Training Planner',function()
+        UI.trainingOwner=UI.workshopSelectedCharacter
+        UI.trainingProfession=UI.workshopSelectedProfession
+        UI:Switch('Training')
+    end)
+    openTraining:SetPoint('TOPLEFT',rightLower,'TOPLEFT',3,-103)
+    openTraining:SetPoint('TOPRIGHT',rightLower,'TOPRIGHT',-7,-103)
+    openTraining:SetHeight(28)
+    local originalRefresh=page.Refresh
+    function page:Refresh()
+        originalRefresh(self)
+        for _,control in ipairs({goalHead,goalCopy,goalInput,save,clear,beyond,goalState,linked}) do
+            control:Hide()
+        end
+        local key,prof=UI.workshopSelectedCharacter,UI.workshopSelectedProfession
+        local c=key and AF.db.characters[key]
+        local skill=c and c.professions and c.professions[prof]
+        openTraining:SetShown(skill~=nil)
+        if skill then
+            local goal=AF:GetWorkshopGoal(key,prof)
+            trainingSummary:SetText('Selected: '..prof..' '..tostring(skill.skill or '?')..' / '..
+                tostring(skill.maximum or '?')..'\n'..
+                (goal and ('Saved target: '..tostring(goal.target)) or 'No Training Goal saved')..'\n'..
+                'Select Training to calculate craft paths and manage goals.')
+        else
+            trainingSummary:SetText('Select a crafter and profession to view its Training Goal and craft route.')
+        end
     end
     page:Refresh()
 end
