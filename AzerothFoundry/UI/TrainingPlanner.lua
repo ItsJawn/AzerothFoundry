@@ -1,5 +1,5 @@
--- Azeroth Foundry / Workshop / Training (v1.0.30)
--- Upward-moving curated guide, context-sensitive production graph and inspector.
+-- Azeroth Foundry / Workshop / Training (v1.0.30.1)
+-- Upward-moving curated guide, balanced semantic zoom, and focused inspector.
 -- Pure presentation: never initiates a protected profession or crafting action on update.
 local _, AF = ...
 local UI, P = AF.UI, AF.UI.palette
@@ -97,14 +97,18 @@ end
 local function SourceText(seg)
     if not seg or seg.learned then return 'Recipe learned' end
     local source=seg.guideAcquisition
-    if source=='vendor' then return 'Acquire vendor formula before crafting' end
+    if source=='vendor' then return 'Acquire vendor recipe before crafting' end
     if source=='book' then return 'Obtain the skill book or manual first' end
+    if source=='reputation' then return 'Reputation vendor unlock required' end
+    if source=='special-trainer' then return 'Visit the special trainer or complete its quest' end
     return 'Visit trainer to learn'
 end
 local function SourceShort(seg)
     if not seg or seg.learned then return 'LEARNED' end
     if seg.guideAcquisition=='vendor' then return 'VENDOR RECIPE' end
     if seg.guideAcquisition=='book' then return 'BOOK / MANUAL' end
+    if seg.guideAcquisition=='reputation' then return 'REPUTATION' end
+    if seg.guideAcquisition=='special-trainer' then return 'SPECIAL TRAINER' end
     return 'VISIT TRAINER'
 end
 local function Coins(value)
@@ -203,22 +207,57 @@ local function AlternateIcon(plan,a)
     end
     return 'Interface\\Icons\\INV_Misc_QuestionMark'
 end
+-- A recommendation is an optional, verified same-skill-band price comparison.
+-- Theme token colors are deliberately used instead of a fixed green texture,
+-- so all Theme Studio themes can adjust the emphasis appropriately.
+local function RecommendationHighlight(frame)
+    local fill=frame:CreateTexture(nil,'BORDER')
+    fill:SetPoint('TOPLEFT',frame,'TOPLEFT',2,-2)
+    fill:SetPoint('BOTTOMRIGHT',frame,'BOTTOMRIGHT',-2,2)
+    local edges={}
+    for _,side in ipairs({'TOP','BOTTOM','LEFT','RIGHT'}) do
+        local line=frame:CreateTexture(nil,'OVERLAY')
+        if side=='TOP' then line:SetPoint('TOPLEFT');line:SetPoint('TOPRIGHT');line:SetHeight(2)
+        elseif side=='BOTTOM' then line:SetPoint('BOTTOMLEFT');line:SetPoint('BOTTOMRIGHT');line:SetHeight(2)
+        elseif side=='LEFT' then line:SetPoint('TOPLEFT');line:SetPoint('BOTTOMLEFT');line:SetWidth(2)
+        else line:SetPoint('TOPRIGHT');line:SetPoint('BOTTOMRIGHT');line:SetWidth(2) end
+        edges[#edges+1]=line
+    end
+    local function Paint(_,tokens)
+        local green=tokens.success or {.31,.77,.45}
+        fill:SetColorTexture(green[1],green[2],green[3],.12)
+        for _,line in ipairs(edges) do
+            line:SetColorTexture(green[1],green[2],green[3],.86)
+        end
+    end
+    if UI.RegisterThemeTarget then UI:RegisterThemeTarget(frame,Paint)
+    else Paint(nil,{}) end
+end
 local function AlternateCard(parent,plan,a,x,y,w,h,onClick)
     local b=CreateFrame('Button',nil,parent)
     b:SetPoint('TOPLEFT',parent,'TOPLEFT',x,-y)
     b:SetSize(w,h)
     b.afTrainingAlternative=a.recipeID
     ThemedSurface(b,true)
+    if a.recommended then RecommendationHighlight(b) end
     local rail=Rule(b,2,2,3,h-4,{.55,.57,.56,.9})
-    ThemeRule(b,rail,'accent2',.90)
+    ThemeRule(b,rail,a.recommended and 'success' or 'accent2',.90)
     local icon=Icon(b,AlternateIcon(plan,a),12,13,32)
     local title=Text(b,a.name or 'Alternative',53,10,w-63,28)
     TypeSize(title,13)
-    local detail=Text(b,CoinifyLabel(a.label or 'Learned alternative')..' / '..(a.price and Coins(a.price) or 'price unknown'),12,44,w-24,h-51)
+    local description
+    if a.recommended then
+        description='|TInterface\\RaidFrame\\ReadyCheck-Ready:14:14:0:0|t  Save '..Coins(a.savings or 0)..
+            '  /  Cost '..Coins(a.price)
+    else
+        description=CoinifyLabel(a.label or 'Learned alternative')..' / '..
+            (a.price and Coins(a.price) or 'price unknown')
+    end
+    local detail=Text(b,description,12,44,w-24,h-51)
     TypeSize(detail,11)
     if UI.RegisterThemeTarget then UI:RegisterThemeTarget(b,function(_,t)
         local ink=t.dataText or {1,.9,.7}
-        local accent=t.accent2 or ink
+        local accent=a.recommended and (t.success or t.accent2) or t.accent2 or ink
         title:SetTextColor(accent[1],accent[2],accent[3],1)
         detail:SetTextColor(ink[1],ink[2],ink[3],1)
     end) end
@@ -226,7 +265,12 @@ local function AlternateCard(parent,plan,a,x,y,w,h,onClick)
     b:SetScript('OnEnter',function(self)
         if GameTooltip then GameTooltip:SetOwner(self,'ANCHOR_RIGHT')
             GameTooltip:AddLine(a.name or 'Alternate recipe',1,.82,.5)
-            GameTooltip:AddLine(CoinifyLabel(a.label or 'Learned alternative')..'\nReagents: '..(a.price and Coins(a.price) or 'auction price incomplete'),1,1,1,true)
+            GameTooltip:AddLine(CoinifyLabel(a.label or 'Learned alternative')..'\nReagents: '..
+                (a.price and Coins(a.price) or 'price incomplete'),1,1,1,true)
+            if a.recommended then
+                GameTooltip:AddLine('Estimated skill-up odds are no worse than the guide recipe throughout this skill band.',.53,1,.67,true)
+                GameTooltip:AddLine('Recorded Auctionator/vendor quotes may be outdated. This does not guarantee a sale or profit.',.9,.82,.65,true)
+            end
             GameTooltip:Show() end
         rail:SetAlpha(1)
     end)
@@ -251,7 +295,10 @@ local function MaterialQuote(id,qty)
 end
 local function QuoteLabel(quote)
     if quote and quote.cost~=nil then
-        return Coins(quote.cost)..(quote.source=='vendor' and '  (Vendor)' or '  (AH)')
+        local origin=quote.source=='vendor' and 'Vendor' or
+            quote.source=='vendor-reference' and 'Vendor estimate' or
+            quote.source=='owned' and 'Owned' or 'AH'
+        return Coins(quote.cost)..'  ('..origin..')'
     end
     return 'price unavailable'
 end
@@ -303,6 +350,9 @@ function UI:BuildTrainingPlanner(page)
     UI.trainingTargetDrafts=UI.trainingTargetDrafts or {}
     UI.trainingOverrides=UI.trainingOverrides or {}
     UI.trainingMode=UI.trainingMode or 'cheap'
+    -- Three evenly spaced semantic stages: 50-85% compact, 85-120% detailed,
+    -- and 120-155% automatic entry to a focused milestone. Focus has its own
+    -- independent wheel zoom and never exits on a downward wheel notch.
     UI.trainingGraphZoom=UI.trainingGraphZoom or .75
     UI.trainingFocusZoom=UI.trainingFocusZoom or 1.0
     UI.trainingGraphFocus=UI.trainingGraphFocus or false
@@ -313,6 +363,23 @@ function UI:BuildTrainingPlanner(page)
             return nil,'No curated crafting route for '..tostring(prof)..' has been verified yet.'
         end
         return AF:CalculateTrainingGuide(owner,prof,goal,UI.trainingMode,UI.trainingOverrides)
+    end
+    -- Invoked only from an actual UI click. Keep protected OpenTradeSkill out of
+    -- page refresh, OnShow and timers; a failure must not abort profession
+    -- selection or leave the selector in an old state.
+    local function EnsureTrainingScan(owner,profession)
+        if not owner or not profession then return false,'Select a profession to scan.' end
+        if owner~=AF:GetCurrentKey() then
+            return false,'Offline character: log into that character to refresh its recipes.'
+        end
+        if type(AF.PrepareWorkshopProfessionForScan)~='function' then
+            return false,'Background profession scanning is unavailable.'
+        end
+        local called,ok,message=pcall(AF.PrepareWorkshopProfessionForScan,AF,profession,owner)
+        if not called then
+            return false,'Native profession scan failed; use Scan or open the profession manually. ('..tostring(ok)..')'
+        end
+        return ok,message
     end
 
     local heading=CreateFrame('Frame',nil,page)
@@ -355,6 +422,9 @@ function UI:BuildTrainingPlanner(page)
     goalInput:SetSize(67,27)
     local applyGoal,clearGoal
     local prevPair
+    -- Initialized after the viewport is constructed. UI controls can safely
+    -- request a transition from their existing click callbacks.
+    local RequestViewTransition
     local function SetMessage(str) UI.trainingMessage=str end
     local function Rebuild(resetChoices)
         local owner,prof=UI.trainingOwner,UI.trainingProfession
@@ -416,39 +486,67 @@ function UI:BuildTrainingPlanner(page)
         -- This is another explicit player click suitable for protected native
         -- profession preparation, including after a cold login or close.
         local owner,prof=UI.trainingOwner,UI.trainingProfession
-        if owner and prof and owner==AF:GetCurrentKey() and AF.PrepareWorkshopProfessionForScan then
-            local ok,msg=AF:PrepareWorkshopProfessionForScan(prof,owner)
+        if owner and prof and owner==AF:GetCurrentKey() then
+            local ok,msg=EnsureTrainingScan(owner,prof)
             if msg then UI.trainingMessage=msg end
             if ok==false and AF.Print and msg then AF.Print(msg) end
         end
-        UI.trainingGraphFocus=true
-        UI.trainingGraphStep=1
-        if page.DrawGuide then page:DrawGuide(true) end
-        page:Refresh(true)
+        if RequestViewTransition then RequestViewTransition(true,1) end
     end)
     focusButton:SetSize(143,24)
     focusButton:SetPoint('TOPLEFT',board,'TOPLEFT',14,-99)
+    local function NearbyGroupStep(delta)
+        local plan=UI.trainingPlan
+        local groups=plan and plan.displayGroups or {}
+        if #groups==0 then return UI.trainingGraphStep or 1 end
+        local groupIndex=plan.displayIndex and plan.displayIndex[UI.trainingGraphStep or 1] or 1
+        local target=max(1,min(#groups,groupIndex+delta))
+        return groups[target].firstIndex
+    end
     local previous=Button(board,'<',function()
         UI.trainingGraphFocus=true
-        UI.trainingGraphStep=max(1,UI.trainingGraphStep-1)
-        if page.DrawGuide then page:DrawGuide(true) end
+        UI.trainingGraphStep=NearbyGroupStep(-1)
+        UI.trainingBreakdownOpen=false
         page:Refresh(true)
     end)
     previous:SetSize(26,24)
     previous:SetPoint('LEFT',focusButton,'RIGHT',6,0)
     local next=Button(board,'>',function()
         UI.trainingGraphFocus=true
-        UI.trainingGraphStep=min(#(UI.trainingPlan and UI.trainingPlan.segments or {}),UI.trainingGraphStep+1)
-        if page.DrawGuide then page:DrawGuide(true) end
+        UI.trainingGraphStep=NearbyGroupStep(1)
+        UI.trainingBreakdownOpen=false
         page:Refresh(true)
     end)
     next:SetSize(26,24);next:SetPoint('LEFT',previous,'RIGHT',5,0)
     local overview=Button(board,'Overview',function()
-        UI.trainingGraphFocus=false
-        if page.DrawGuide then page:DrawGuide(true) end
-        page:Refresh(true)
+        if RequestViewTransition then RequestViewTransition(false) end
     end)
     overview:SetSize(86,24);overview:SetPoint('LEFT',next,'RIGHT',5,0)
+    -- Maintainer-facing guide sanity notes. They never alter recipes or queues.
+    local routeAuditButton=Button(board,'Route Review',function()
+        local plan=UI.trainingPlan
+        local warning=plan and plan.routeAudit and plan.routeAudit[1]
+        if warning and RequestViewTransition then
+            UI.trainingBreakdownOpen=true
+            RequestViewTransition(true,warning.index)
+        end
+    end)
+    routeAuditButton:SetSize(137,24)
+    routeAuditButton:SetPoint('LEFT',overview,'RIGHT',9,0)
+    routeAuditButton:Hide()
+    routeAuditButton:SetScript('OnEnter',function(self)
+        if not GameTooltip then return end
+        GameTooltip:SetOwner(self,'ANCHOR_RIGHT')
+        GameTooltip:AddLine('Guide review suggestions',1,.82,.45)
+        GameTooltip:AddLine('These are data-audit reminders, not proof a recipe is invalid.',.9,.9,.83,true)
+        local warnings=UI.trainingPlan and UI.trainingPlan.routeAudit or {}
+        for i=1,min(10,#warnings) do
+            GameTooltip:AddLine(warnings[i].message,1,.78,.48,true)
+        end
+        if #warnings>10 then GameTooltip:AddLine('+'..tostring(#warnings-10)..' more notes',.86,.84,.77) end
+        GameTooltip:Show()
+    end)
+    routeAuditButton:SetScript('OnLeave',function() if GameTooltip then GameTooltip:Hide() end end)
     local zoomOut,zoomIn,zoomInfo=nil,nil,nil
 
     local viewport=CreateFrame('ScrollFrame',nil,board)
@@ -497,17 +595,93 @@ function UI:BuildTrainingPlanner(page)
         PanBy((dragX-x)/scale,(y-dragY)/scale)
         dragX,dragY=x,y
     end
-    -- Each mouse-wheel notch moves five percent. The two views retain
-    -- separate zoom targets; Focus NEVER becomes Overview from wheel input.
-    local targetZoom=UI.trainingGraphZoom or .75
+    -- Three balanced semantic stages: compact overview, expanded overview,
+    -- focused milestone. Focus is entered by scrolling in past 120%, but wheel
+    -- movement INSIDE Focus keeps the user there (Overview exits explicitly).
+    local COMPACT_END=.85
+    local FOCUS_ENTRY=1.20
+    local MAX_WHEEL_ZOOM=1.55
+    local targetZoom=max(.50,min(FOCUS_ENTRY,UI.trainingGraphZoom or .75))
+    UI.trainingGraphZoom=targetZoom
     local targetFocusZoom=UI.trainingFocusZoom or 1.0
-    function page:ZoomGuide(delta,reset)
-        local focusing=UI.trainingGraphFocus
-        if focusing then
-            targetFocusZoom=reset and 1.0 or max(.70,min(1.50,targetFocusZoom+(tonumber(delta) or 0)))
-        else
-            targetZoom=reset and .75 or max(.50,min(1.60,targetZoom+(tonumber(delta) or 0)))
+    local zoomTween,focusTween
+    local viewFade,viewFadeTimer,viewFadeSwapped=nil,0,false
+    local function Smoothstep(t)
+        t=max(0,min(1,t))
+        return t*t*(3-2*t)
+    end
+    local viewMask=CreateFrame('Frame',nil,board)
+    viewMask:SetAllPoints(viewport)
+    viewMask:SetFrameLevel(viewport:GetFrameLevel()+30)
+    viewMask:EnableMouse(false)
+    local maskArt=viewMask:CreateTexture(nil,'ARTWORK')
+    maskArt:SetAllPoints(viewMask)
+    maskArt:SetColorTexture(.09,.075,.065,.97)
+    if UI.RegisterThemeTarget then
+        UI:RegisterThemeTarget(viewMask,function(_,colors)
+            local c=colors.dataSurface or colors.surface or {.09,.075,.065}
+            maskArt:SetColorTexture(c[1],c[2],c[3],.97)
+        end)
+    end
+    viewMask:SetAlpha(0)
+    viewMask:Hide()
+
+    local function StartZoomTween(focus,to)
+        local key=focus and 'trainingFocusZoom' or 'trainingGraphZoom'
+        local from=UI[key] or (focus and 1 or .75)
+        local target=max(focus and .70 or .50,min(focus and 1.50 or MAX_WHEEL_ZOOM,to))
+        local data={from=from,to=target,elapsed=0,duration=.29}
+        if focus then focusTween=data else zoomTween=data end
+    end
+
+    RequestViewTransition=function(toFocus,step,carryZoom,rebuildOnly)
+        toFocus=not not toFocus
+        if viewFade then
+            -- Collapse repeated wheel and button requests into one transition.
+            -- Avoid building a second stack of frames while fading.
+            if viewFade.toFocus==toFocus then
+                viewFade.step=step or viewFade.step
+                return
+            end
+            -- A reverse request mid-transition is handled after this fade.
+            viewFade.queued={toFocus=toFocus,step=step}
+            return
         end
+        if UI.trainingGraphFocus==toFocus and not rebuildOnly then
+            if toFocus and step then
+                UI.trainingGraphStep=step
+                page:Refresh(true)
+            end
+            return
+        end
+        viewFade={toFocus=toFocus,step=step,carryZoom=carryZoom,rebuildOnly=rebuildOnly}
+        viewFadeTimer=0
+        viewFadeSwapped=false
+        viewMask:SetAlpha(0)
+        viewMask:Show()
+        zoomTween=nil
+        focusTween=nil
+    end
+
+    function page:ZoomGuide(delta,reset)
+        local amount=tonumber(delta) or 0
+        if UI.trainingGraphFocus then
+            targetFocusZoom=reset and 1.0 or max(.70,min(1.50,targetFocusZoom+amount))
+            if not viewFade then StartZoomTween(true,targetFocusZoom) end
+            return
+        end
+        if viewFade and viewFade.toFocus then
+            -- Do not lose additional wheel notches while the new Focus
+            -- scene is fading into view.
+            viewFade.focusWheelDelta=(viewFade.focusWheelDelta or 0)+amount
+            return
+        end
+        if reset then
+            targetZoom=.75
+        else
+            targetZoom=max(.50,min(MAX_WHEEL_ZOOM,targetZoom+amount))
+        end
+        if not viewFade then StartZoomTween(false,min(FOCUS_ENTRY,targetZoom)) end
     end
     local function Wheel(_,delta)
         if IsShiftKeyDown and IsShiftKeyDown() then PanBy(-delta*95,0)
@@ -517,50 +691,109 @@ function UI:BuildTrainingPlanner(page)
     viewport:SetScript('OnMouseDown',MouseDown)
     viewport:SetScript('OnMouseUp',MouseUp)
     viewport:SetScript('OnHide',MouseUp)
-    local zoomRedrawElapsed=0
     viewport:SetScript('OnUpdate',function(_,dt)
         DragUpdate()
-        if page:IsShown() and UI.trainingGraphFocus then
-            local old=UI.trainingFocusZoom or 1.0
-            local delta=targetFocusZoom-old
-            if math.abs(delta)>.00025 then
-                local nextZoom=old+delta*(1-math.exp(-math.min(.10,max(0,dt))*14))
-                if math.abs(targetFocusZoom-nextZoom)<.001 then nextZoom=targetFocusZoom end
+        if not page:IsShown() then return end
+        dt=max(0,min(tonumber(dt) or 0,.10))
+        if viewFade then
+            viewFadeTimer=viewFadeTimer+dt
+            local oldState=viewFade
+            local FADE_OUT=oldState.rebuildOnly and .12 or .18
+            local FADE_IN=oldState.rebuildOnly and .18 or .24
+            if viewFadeTimer<FADE_OUT then
+                viewMask:SetAlpha(.93*Smoothstep(viewFadeTimer/FADE_OUT))
+            else
+                if not viewFadeSwapped then
+                    viewFadeSwapped=true
+                    if oldState.rebuildOnly then
+                        -- Semantic card-density handoff. Keep scroll position
+                        -- and plan intact, and redraw only behind the fade.
+                        if page.DrawGuide then page:DrawGuide(true) end
+                    else
+                        UI.trainingGraphFocus=oldState.toFocus
+                        if oldState.toFocus then
+                            UI.trainingGraphStep=oldState.step or 1
+                            -- Carry minor wheel overshoot into the focused view.
+                            targetFocusZoom=max(.70,min(1.50,1.0+
+                                (oldState.carryZoom or 0)+(oldState.focusWheelDelta or 0)))
+                            UI.trainingFocusZoom=targetFocusZoom
+                            targetZoom=FOCUS_ENTRY
+                            UI.trainingGraphZoom=FOCUS_ENTRY
+                        else
+                            targetZoom=1.02
+                            UI.trainingGraphZoom=targetZoom
+                        end
+                        if page.Refresh then page:Refresh(true) end
+                    end
+                end
+                local t=(viewFadeTimer-FADE_OUT)/FADE_IN
+                viewMask:SetAlpha(.93*(1-Smoothstep(t)))
+                if t>=1 then
+                    local queued=oldState.queued
+                    viewFade=nil
+                    viewMask:Hide()
+                    viewMask:SetAlpha(0)
+                    if queued then
+                        RequestViewTransition(queued.toFocus,queued.step)
+                    elseif UI.trainingGraphFocus and
+                        math.abs(targetFocusZoom-(UI.trainingFocusZoom or 1))>.0001 then
+                        -- Focus wheel inputs received during the fade should
+                        -- take effect once the new scene finishes opening.
+                        StartZoomTween(true,targetFocusZoom)
+                    elseif not UI.trainingGraphFocus and
+                        math.abs(targetZoom-(UI.trainingGraphZoom or .75))>.0001 then
+                        -- Wheel events received during the fade continue
+                        -- from the settled layout instead of being lost.
+                        StartZoomTween(false,min(FOCUS_ENTRY,targetZoom))
+                    end
+                end
+            end
+        elseif UI.trainingGraphFocus then
+            if focusTween then
+                local t=focusTween
+                t.elapsed=min(t.duration,t.elapsed+dt)
+                local nextZoom=t.from+(t.to-t.from)*Smoothstep(t.elapsed/t.duration)
+                local old=UI.trainingFocusZoom or 1
                 UI.trainingFocusZoom=nextZoom
-                -- Preserve the world coordinate under the center of the viewport.
-                -- The stage handles scrolling while its child scales smoothly.
+                -- Keep the center of the focused graph beneath the pointer.
+                -- No card reconstruction is needed for its independent scale.
                 if stage and world and worldW and worldH then
                     local vw,vh=viewport:GetWidth(),viewport:GetHeight()
-                    local cx=((viewport:GetHorizontalScroll() or 0)+vw*.5)/old
-                    local cy=((viewport:GetVerticalScroll() or 0)+vh*.5)/old
+                    local cx=((viewport:GetHorizontalScroll() or 0)+vw*.5)/max(.01,old)
+                    local cy=((viewport:GetVerticalScroll() or 0)+vh*.5)/max(.01,old)
                     stage:SetSize(worldW*nextZoom,worldH*nextZoom)
                     world:SetScale(nextZoom)
                     if viewport.UpdateScrollChildRect then viewport:UpdateScrollChildRect() end
                     ScrollTo(cx*nextZoom-vw*.5,cy*nextZoom-vh*.5,true)
                 end
+                if t.elapsed>=t.duration then focusTween=nil end
             end
-        end
-        if page:IsShown() and not UI.trainingGraphFocus then
-            local before=UI.trainingGraphZoom or .75
-            local diff=targetZoom-before
-            if math.abs(diff)>.0003 then
-                local nextZoom=before+diff*(1-math.exp(-math.min(.1,math.max(0,dt))*18))
-                if math.abs(targetZoom-nextZoom)<.002 then nextZoom=targetZoom end
+        else
+            if zoomTween then
+                local t=zoomTween
+                t.elapsed=min(t.duration,t.elapsed+dt)
+                local nextZoom=t.from+(t.to-t.from)*Smoothstep(t.elapsed/t.duration)
                 UI.trainingGraphZoom=nextZoom
-                -- Animate the visible tree every frame, but rebuild crisp
-                -- native-resolution cards only a few times per transition.
+                -- Scale the current scene per-frame; construct crisp WoW
+                -- frames only when the wheel animation fully settles.
                 if world and lastDrawnZoom and lastDrawnZoom>0 then
-                    world:SetScale(max(.80,min(1.20,nextZoom/lastDrawnZoom)))
+                    world:SetScale(max(.76,min(1.30,nextZoom/lastDrawnZoom)))
                 end
-                zoomRedrawElapsed=zoomRedrawElapsed+dt
-                if zoomRedrawElapsed>=.11 or nextZoom==targetZoom then
-                    zoomRedrawElapsed=0
-                    page:DrawGuide(true)
+                if t.elapsed>=t.duration then
+                    zoomTween=nil
+                    if targetZoom>=FOCUS_ENTRY then
+                        RequestViewTransition(true,1,max(0,targetZoom-FOCUS_ENTRY))
+                    elseif (lastDrawnZoom or nextZoom)<COMPACT_END ~=
+                        (nextZoom<COMPACT_END) then
+                        RequestViewTransition(false,nil,nil,true)
+                    else
+                        page:DrawGuide(true)
+                    end
                 end
             end
         end
         if panTargetX then
-            local k=1-math.exp(-max(0,dt)*13)
+            local k=1-math.exp(-dt*13)
             local x=viewport:GetHorizontalScroll() or 0
             local y=viewport:GetVerticalScroll() or 0
             local nx=x+(panTargetX-x)*k
@@ -571,11 +804,13 @@ function UI:BuildTrainingPlanner(page)
             end
         end
         if revealTime<1 and world then
-            revealTime=min(1,revealTime+max(0,dt)*5.5)
-            local t=1-(1-revealTime)^3
+            revealTime=min(1,revealTime+dt*4.8)
+            local t=Smoothstep(revealTime)
             world:SetAlpha(t)
-            world:SetScale((UI.trainingGraphFocus and (UI.trainingFocusZoom or 1) or 1)*
-                (revealFromScale+(1-revealFromScale)*t))
+            if not focusTween and not zoomTween then
+                world:SetScale((UI.trainingGraphFocus and (UI.trainingFocusZoom or 1) or 1)*
+                    (revealFromScale+(1-revealFromScale)*t))
+            end
         end
     end)
     ThemedSurface(viewport,false)
@@ -591,10 +826,10 @@ function UI:BuildTrainingPlanner(page)
         if not owner or not prof then return end
         if owner~=AF:GetCurrentKey() then
             UI.trainingMessage='Offline character: log into that character to scan.'
-        elseif AF.PrepareWorkshopProfessionForScan then
-            local ok,msg=AF:PrepareWorkshopProfessionForScan(prof,owner)
+        else
+            local ok,msg=EnsureTrainingScan(owner,prof)
             UI.trainingMessage=msg
-            if not ok and AF.Print then AF.Print(msg) end
+            if not ok and AF.Print and msg then AF.Print(msg) end
         end
         if page.Refresh then page:Refresh(true) end
     end)
@@ -805,30 +1040,29 @@ function UI:BuildTrainingPlanner(page)
     local function UseAlternate(plan,seg,a)
         UI.trainingOverrides=UI.trainingOverrides or {}
         UI.trainingOverrides[seg.startSkill]=a.recipeID
-        Rebuild(false)
         UI.trainingGraphFocus=true
+        Rebuild(false)
         UI.trainingGraphStep=max(1,min(UI.trainingGraphStep,#(UI.trainingPlan and UI.trainingPlan.segments or {})))
-        page:DrawGuide(true)
+        page:DrawGuide()
     end
     local function ResetAlternate(seg)
         UI.trainingOverrides=UI.trainingOverrides or {}
         UI.trainingOverrides[seg.startSkill]=nil
-        Rebuild(false)
         UI.trainingGraphFocus=true
-        page:DrawGuide(true)
+        Rebuild(false)
+        page:DrawGuide()
     end
     local function ClickFocus(index)
-        UI.trainingGraphStep=index
-        UI.trainingGraphFocus=true
-        page:DrawGuide(true)
-        page:Refresh(true)
+        if RequestViewTransition then RequestViewTransition(true,index) end
     end
     function page:DrawGuide(force,scrollToCurrent)
         local plan=UI.trainingPlan
         local zoom=UI.trainingGraphZoom or .85
         local focusing=UI.trainingGraphFocus
-        local idx=UI.trainingGraphStep or 1
-        local density=zoom>=.90 and 'detail' or zoom>=.70 and 'medium' or 'compact'
+        local count=plan and #(plan.segments or {}) or 0
+        local idx=max(1,min(max(1,count),UI.trainingGraphStep or 1))
+        if UI.trainingGraphStep~=idx then UI.trainingGraphStep=idx end
+        local density=zoom>=COMPACT_END and 'detail' or 'compact'
         local sig=tostring(plan)..':'..tostring(focusing)..':'..idx..':'..density..':'..tostring(zoom)
         if not force and sig==lastDrawKey then return end
         -- Do not clear active cast/controls refs on the MANY no-op refreshes.
@@ -850,28 +1084,53 @@ function UI:BuildTrainingPlanner(page)
         local oldFraction=oldMaxY>0 and oldY/oldMaxY or 1
         local newlyPlanned=lastRenderedPlan~=plan
         lastRenderedPlan=plan
-        if stage then stage:Hide();stage:SetParent(nil) end
+        if stage then
+            -- Retired scene nodes should not remain in Theme Studio's targets.
+            -- Scroll/zoom previously created hundreds of abandoned scene nodes.
+            local targets=UI.themeTargets
+            if targets then
+                local function ClearThemeTargets(frame)
+                    targets[frame]=nil
+                    if frame.GetRegions then
+                        for _,region in ipairs({frame:GetRegions()}) do targets[region]=nil end
+                    end
+                    if frame.GetChildren then
+                        for _,child in ipairs({frame:GetChildren()}) do ClearThemeTargets(child) end
+                    end
+                end
+                ClearThemeTargets(stage)
+            end
+            stage:Hide()
+            stage:SetParent(nil)
+        end
         local segs=plan and plan.segments or {}
+        -- Consolidate only the visual route. The original per-skill segments
+        -- remain untouched for native crafting and alternative overrides.
+        local groups=plan and plan.displayGroups or {}
+        local groupIndex=(plan and plan.displayIndex and plan.displayIndex[idx]) or idx
+        local currentGroup=groups[groupIndex]
         local vw=tonumber(viewport:GetWidth()) or 0
         local vh=tonumber(viewport:GetHeight()) or 0
         if vw<160 then vw=max(650,(board:GetWidth() or 0)-24) end
         if vh<180 then vh=max(520,(board:GetHeight() or 0)-150) end
         -- Semantic zoom: all artwork and text are rasterized at native UI scale.
         -- Changing zoom changes layout density instead of shrinking glyphs.
-        local compact=zoom<.70
-        local detail=zoom>=.90
-        local factor=max(0,min(1,(zoom-.50)/.65))
+        local compact=zoom<COMPACT_END
+        local detail=zoom>=COMPACT_END
+        local factor=max(0,min(1,(zoom-.50)/(FOCUS_ENTRY-.50)))
         local gap=floor(78+98*factor+.5)
         local nodeW=floor(235+94*factor+.5)
         local nodeH=floor(72+60*factor+.5)
         local topY=98
-        local contentHeight=topY+#segs*gap+100
+        local contentHeight=topY+#groups*gap+100
         local w,h
         if focusing then
             w=max(1300,vw)
             local seg=segs[max(1,min(#segs,idx))]
             local altCount=seg and #(seg.alternatives or {}) or 0
-            h=max(vh,540+max(0,altCount-3)*81)
+            local bandExtra=(currentGroup and #currentGroup.parts>1 and UI.trainingBreakdownOpen)
+                and (#currentGroup.parts*29+60) or 0
+            h=max(vh,540+max(0,altCount-3)*81,570+bandExtra)
         else
             local sideRoom=detail and 262 or 175
             w=max(vw,nodeW+sideRoom*2+64)
@@ -925,10 +1184,17 @@ function UI:BuildTrainingPlanner(page)
             local materialX=innerX+262
             local mainX=innerX+527
             local altX=innerX+911
-            local title=Text(world,'MILESTONE  '..tostring(idx)..' / '..tostring(#segs),innerX+18,24,700,27,'title')
+            local focusTitle='MILESTONE  '..tostring(groupIndex)..' / '..tostring(#groups)
+            local title=Text(world,focusTitle,innerX+18,24,700,27,'title')
             TypeSize(title,19)
-            Text(world,tostring(seg.startSkill)..'  -  '..tostring(seg.endSkill)..'  '..tostring(plan.profession)..
-                '   /   curated crafting guide with learned alternatives',innerX+18,56,930,28)
+            local rangeInfo=tostring(seg.startSkill)..' - '..tostring(seg.endSkill)..'  '..tostring(plan.profession)..
+                '   /   curated crafting guide with learned alternatives'
+            if currentGroup and #currentGroup.parts>1 then
+                rangeInfo='COMBINED '..tostring(currentGroup.startSkill)..' - '..tostring(currentGroup.endSkill)..
+                    '  /  ~'..tostring(currentGroup.crafts)..' total crafts ('..tostring(#currentGroup.parts)..
+                    ' planned bands)'..'  /  selected '..tostring(seg.startSkill)..'-'..tostring(seg.endSkill)
+            end
+            Text(world,rangeInfo,innerX+18,56,1150,28)
             local line=Rule(world,innerX+18,96,958,2)
             ThemeRule(world,line,'accent2',.85)
             local cost,known=CostForStep(seg)
@@ -941,7 +1207,11 @@ function UI:BuildTrainingPlanner(page)
                 '\n|T'..ProfessionIcon(plan.profession)..':13:13:0:0|t  ~'..tostring(seg.quantity)..' expected crafts'..
                 '\n'..certainty..'\n'..SourceText(seg)..
                 '\nReagent estimate: '..(known and Coins(cost) or 'incomplete auction prices')
+            if seg.selectedRecommended then
+                sub=sub..'\n|TInterface\\RaidFrame\\ReadyCheck-Ready:13:13:0:0|t  Est. savings: '..Coins(seg.selectedSavings or 0)
+            end
             local recipeCard=Node(world,mainX,163,352,260,seg.name,sub,RecipeIcon(seg))
+            if seg.selectedRecommended then RecommendationHighlight(recipeCard) end
             local statusStripe=Rule(recipeCard,13,190,326,3)
             ThemeRule(recipeCard,statusStripe,seg.learned and 'success' or 'accent2',.75)
             local cardProgressTrack=Rule(recipeCard,14,199,324,8,{.23,.20,.16,1})
@@ -1054,19 +1324,51 @@ function UI:BuildTrainingPlanner(page)
                 Node(world,altX,167,312,91,'NO LEARNED ALTERNATIVES',
                     'Discover additional patterns to compare cost and materials.',nil)
             end
+            local belowCardY=440
             if seg.overridden then
                 local reset=Button(world,'Restore Trainer Baseline',function() ResetAlternate(seg) end)
-                reset:SetPoint('TOPLEFT',world,'TOPLEFT',mainX,-441)
-                reset:SetSize(351,31)
+                reset:SetPoint('TOPLEFT',world,'TOPLEFT',mainX,-belowCardY)
+                reset:SetSize(351,29)
+                belowCardY=belowCardY+36
+            end
+            if currentGroup and #currentGroup.parts>1 then
+                local toggle=Button(world,(UI.trainingBreakdownOpen and 'Hide' or 'Show')..
+                    ' Skill-Band Breakdown ('..tostring(#currentGroup.parts)..')',function()
+                        UI.trainingBreakdownOpen=not UI.trainingBreakdownOpen
+                        page:DrawGuide(true)
+                    end)
+                toggle:SetPoint('TOPLEFT',world,'TOPLEFT',mainX,-belowCardY)
+                toggle:SetSize(351,27)
+                Hint(toggle,'One recipe, multiple skill bands',
+                    'Overview combines consecutive crafts of the same recipe. Select a band here to craft that specific batch safely.')
+                belowCardY=belowCardY+35
+                if UI.trainingBreakdownOpen then
+                    for _,part in ipairs(currentGroup.parts) do
+                        local chunk=part.segment
+                        local label=tostring(chunk.startSkill)..' - '..tostring(chunk.endSkill)..
+                            '     ~'..tostring(chunk.quantity)..' crafts'..
+                            (part.index==idx and '   [SELECTED]' or '')
+                        local chooseBand=Button(world,label,function()
+                            UI.trainingGraphStep=part.index
+                            page:Refresh(true)
+                        end)
+                        chooseBand:SetPoint('TOPLEFT',world,'TOPLEFT',mainX,-belowCardY)
+                        chooseBand:SetSize(351,26)
+                        belowCardY=belowCardY+29
+                    end
+                    belowCardY=belowCardY+9
+                end
             end
             if not seg.learned then
                 local trainerTitle=seg.guideAcquisition=='vendor' and 'ACQUIRE VENDOR RECIPE' or
                     seg.guideAcquisition=='book' and 'OBTAIN BOOK / MANUAL' or
+                    seg.guideAcquisition=='reputation' and 'REPUTATION UNLOCK REQUIRED' or
+                    seg.guideAcquisition=='special-trainer' and 'VISIT SPECIAL TRAINER' or
                     ('VISIT '..tostring(plan.profession):upper()..' TRAINER')
-                local trainer=Text(world,trainerTitle,mainX,487,480,22)
+                local trainer=Text(world,trainerTitle,mainX,belowCardY+12,480,22)
                 TypeSize(trainer,14)
                 Text(world,(seg.guideAcquisitionNote or 'Learn or verify the recipe in Forever.')..
-                    '\nRequired skill: '..tostring(seg.requiredSkill or seg.startSkill)..'. Recalculate before queueing.',mainX,515,500,54)
+                    '\nRequired skill: '..tostring(seg.requiredSkill or seg.startSkill)..'. Recalculate before queueing.',mainX,belowCardY+40,500,54)
             end
             ScrollTo(max(0,(w*(UI.trainingFocusZoom or 1)-vw)/2),0,true)
         else
@@ -1074,72 +1376,111 @@ function UI:BuildTrainingPlanner(page)
             -- zoom tier without changing the actual rendered font resolution.
             local cx=floor(w/2)
             topY=topY+centerOffset
-            local spine=Rule(world,cx-1,topY-18,2,#segs*gap+32)
+            local spine=Rule(world,cx-1,topY-18,2,#groups*gap+32)
             ThemeRule(world,spine,'accent2',.65)
             local goal=Node(world,cx-103,topY-91,206,66,
                 'TRAINING TARGET  '..tostring(plan.target),
                 plan.complete and 'Planned milestone' or 'Coverage incomplete',nil)
-            for i=#segs,1,-1 do
-                local seg=segs[i]
-                local y=topY+(#segs-i)*gap
+            for i=#groups,1,-1 do
+                local group=groups[i]
+                local seg=group.firstSegment
+                local rawIndex=group.firstIndex
+                local y=topY+(#groups-i)*gap
                 local nodeX=cx-floor(nodeW/2)
                 local state=SourceShort(seg)
-                local range=tostring(seg.startSkill)..' - '..tostring(seg.endSkill)
-                local oneLine=range..'   /   ~'..tostring(seg.quantity)..' crafts'
-                local chance=seg.estimatedChance==1 and seg.endChance==1 and 'ORANGE' or
-                    (seg.guideUnverified and (NativeGuideStatus(seg,plan.current) or 'DATA UNVERIFIED') or 'YELLOW')
-                local desc=detail and (oneLine..'\n'..chance..'   /   '..state) or oneLine
-                local node=Node(world,nodeX,y,nodeW,nodeH,seg.name,desc,RecipeIcon(seg),
+                local range=tostring(group.startSkill)..' - '..tostring(group.endSkill)
+                local oneLine=range..'   /   ~'..tostring(group.crafts)..' crafts'
+                local mixedColor=false
+                for _,part in ipairs(group.parts) do
+                    local s=part.segment
+                    if s.estimatedChance~=seg.estimatedChance or s.endChance~=seg.endChance or
+                        s.guideUnverified~=seg.guideUnverified then mixedColor=true;break end
+                end
+                local chance=(not group.needsVerification and not mixedColor and
+                    seg.estimatedChance==1 and seg.endChance==1) and 'ORANGE' or
+                    (group.needsVerification and 'DATA UNVERIFIED' or 'ORANGE / YELLOW')
+                local bandNote=#group.parts>1 and ('  /  '..tostring(#group.parts)..' bands') or ''
+                local desc=detail and (oneLine..bandNote..'\n'..chance..'   /   '..state) or oneLine
+                local node=Node(world,nodeX,y,nodeW,nodeH,group.name,desc,RecipeIcon(seg),
                     seg.overridden and {.33,.70,.79} or nil)
-                local focus=Button(world,detail and 'INSPECT STEP' or 'INSPECT',function() ClickFocus(i) end)
+                if (group.selectedRecommendedBands or 0)>0 then
+                    RecommendationHighlight(node)
+                end
+                local focus=Button(world,detail and 'INSPECT STEP' or 'INSPECT',function() ClickFocus(rawIndex) end)
                 focus:SetSize(detail and 107 or 74,compact and 20 or 24)
                 focus:SetPoint('BOTTOMRIGHT',node,'BOTTOMRIGHT',-7,compact and 4 or 6)
-                Hint(focus,seg.name,StepTooltip(seg))
+                local tooltip=group.name..'  ('..range..')\n~'..tostring(group.crafts)..' estimated crafts'
+                if #group.parts>1 then
+                    tooltip=tooltip..'\n'..tostring(#group.parts)..' consecutive skill bands:'
+                    for _,part in ipairs(group.parts) do
+                        tooltip=tooltip..'\n'..tostring(part.segment.startSkill)..'-'..
+                            tostring(part.segment.endSkill)..': ~'..tostring(part.segment.quantity)..' crafts'
+                    end
+                end
+                Hint(focus,group.name,tooltip)
                 if not seg.learned and not compact then
                     local label=Text(world,seg.guideAcquisition=='book' and 'MANUAL' or
-                        seg.guideAcquisition=='vendor' and 'VENDOR' or 'TRAINER',nodeX-83,y+22,76,24)
+                        seg.guideAcquisition=='vendor' and 'VENDOR' or
+                        seg.guideAcquisition=='reputation' and 'REP' or
+                        seg.guideAcquisition=='special-trainer' and 'SPECIAL' or 'TRAINER',nodeX-83,y+22,76,24)
                     TypeSize(label,11)
                     if UI.RegisterThemeTarget then UI:RegisterThemeTarget(label,function(t,c)
                         local a=c.accent2 or {1,.7,.3}
                         t:SetTextColor(a[1],a[2],a[3],1)
                     end) end
                 end
-                local alternatives=seg.alternatives or {}
-                if #alternatives>0 then
+                local altCount=group.alternateCount or 0
+                if altCount>0 then
                     local branchX=nodeX+nodeW+24
                     local branchLine=Rule(world,nodeX+nodeW,y+nodeH/2,24,2)
                     ThemeRule(world,branchLine,'accent2',.75)
                     if compact then
-                        local a=alternatives[1]
+                        local a=group.firstRecommendedAlternative or group.firstAlternative
+                        local hasPick=group.firstRecommendedAlternative~=nil
                         local branchCard=Node(world,branchX,y+5,164,57,
-                            tostring(#alternatives)..' DISCOVERED',
-                            'Inspect choices',AlternateIcon(plan,a))
+                            hasPick and 'BETTER VALUE' or (tostring(altCount)..' DISCOVERED'),
+                            hasPick and 'Inspect green choice' or 'Inspect choices',AlternateIcon(plan,a))
+                        if hasPick then RecommendationHighlight(branchCard) end
                         local hit=CreateFrame('Button',nil,branchCard)
                         hit:SetAllPoints(branchCard)
-                        hit:SetScript('OnClick',function() ClickFocus(i) end)
-                        Hint(hit,'Discovered recipe branches','Click to inspect '..tostring(#alternatives)..
-                            ' alternate recipes and their material estimates.')
+                        hit:SetScript('OnClick',function() ClickFocus(rawIndex) end)
+                        Hint(hit,'Discovered recipe branches','Click to inspect '..tostring(altCount)..
+                            ' distinct alternatives across the combined skill range.')
                     else
-                        local a=alternatives[1]
-                        local text=tostring(#alternatives)..' ALTERNATIVE'..(#alternatives==1 and '' or 'S')
-                        local branchCard=Node(world,branchX,y+12,210,72,text,
+                        local a=group.firstRecommendedAlternative or group.firstAlternative
+                        local hasPick=group.firstRecommendedAlternative~=nil
+                        local label=hasPick and 'RECOMMENDED OPTION' or
+                            (tostring(altCount)..' ALTERNATIVE'..(altCount==1 and '' or 'S'))
+                        local branchCard=Node(world,branchX,y+12,210,72,label,
                             a.name or 'Discovered recipe',AlternateIcon(plan,a))
+                        if hasPick then RecommendationHighlight(branchCard) end
                         local hit=CreateFrame('Button',nil,branchCard)
                         hit:SetAllPoints(branchCard)
-                        hit:SetScript('OnClick',function() ClickFocus(i) end)
-                        Hint(hit,'Discovered recipe branches','Focus to compare learned alternatives and their auction prices.')
+                        hit:SetScript('OnClick',function() ClickFocus(rawIndex) end)
+                        Hint(hit,'Discovered recipe branches','Focus to compare alternatives per individual skill band.')
                     end
                 end
                 if detail then
-                    local mats=seg.recipe and seg.recipe.reagents or {}
-                    local sum,complete=CostForStep(seg)
+                    local materialTypes={}
+                    local sum,complete=0,true
+                    for _,part in ipairs(group.parts) do
+                        local step=part.segment
+                        local cost,known=CostForStep(step)
+                        sum=sum+cost
+                        if not known then complete=false end
+                        for _,mat in ipairs(step.recipe and step.recipe.reagents or {}) do
+                            materialTypes[tostring(mat.itemID)]=true
+                        end
+                    end
+                    local count=0
+                    for _ in pairs(materialTypes) do count=count+1 end
                     local side=Node(world,nodeX-226,y+16,201,95,'RECIPE INPUTS',
-                        tostring(#mats)..' types  /  '..(complete and Coins(sum) or 'price incomplete'),nil)
+                        tostring(count)..' types  /  '..(complete and Coins(sum) or 'price incomplete'),nil)
                     local link=Rule(world,nodeX-25,y+nodeH/2,25,2)
                     ThemeRule(world,link,'accent2',.70)
                 end
             end
-            local startY=topY+#segs*gap
+            local startY=topY+#groups*gap
             local start=Node(world,cx-102,startY,204,68,'YOU ARE HERE',
                 tostring(plan.current)..' skill',nil,{.30,.72,.47})
             local maxX,maxY=Limits()
@@ -1378,6 +1719,9 @@ function UI:BuildTrainingPlanner(page)
 
     local auctionRefresh=CreateFrame('Frame',nil,page)
     auctionRefresh:RegisterEvent('AUCTION_HOUSE_CLOSED')
+    -- Merchant prices are saved on MERCHANT_SHOW / UPDATE. Recalculate after
+    -- closing the merchant so the guide immediately compares new vendor quotes.
+    auctionRefresh:RegisterEvent('MERCHANT_CLOSED')
     auctionRefresh:SetScript('OnEvent',function()
         local plan=UI.trainingPlan
         if plan and plan.guideMode and UI.trainingOwner and UI.trainingProfession and
@@ -1387,17 +1731,36 @@ function UI:BuildTrainingPlanner(page)
         end
     end)
     local options={}
+    local selectionSerial=0
     local function ChooseProfession(entry)
+        if not entry or not entry.owner or not entry.profession then return end
+        chooser:Hide()
+        -- Re-clicking the selected row is not a new profession switch.
+        -- Scan can always be explicitly requested with the Scan button.
+        if UI.trainingOwner==entry.owner and UI.trainingProfession==entry.profession then return end
         UI.trainingOwner,UI.trainingProfession=entry.owner,entry.profession
         UI.workshopSelectedCharacter,UI.workshopSelectedProfession=entry.owner,entry.profession
         UI.trainingPlan=nil;UI.trainingOverrides={};UI.trainingGraphFocus=false;UI.trainingGraphStep=1
-        chooser:Hide();prevPair=nil
-        if entry.owner==AF:GetCurrentKey() then
-            local ok,msg=EnsureTrainingScan('force')
-            if msg then SetMessage(msg) end
-            if ok==false and AF.Print then AF.Print(msg) end
-        else SetMessage('Offline character: log into this character to refresh its recipes.') end
-        page:Refresh()
+        UI.trainingMaterialBranch=nil
+        prevPair=nil
+        -- This MUST happen in the row click: native OpenTradeSkill is protected.
+        local ok,msg=EnsureTrainingScan(entry.owner,entry.profession)
+        SetMessage(msg)
+        if ok==false and entry.owner==AF:GetCurrentKey() and AF.Print and msg then AF.Print(msg) end
+        -- Update the visible identity immediately; generate the potentially
+        -- expensive guide graph on the next frame. Fast successive selections
+        -- invalidate older scheduled refreshes.
+        choose.label:SetText(tostring(entry.label or entry.profession))
+        boardTitle:SetText(tostring(entry.profession)..'  /  GUIDE')
+        selectionSerial=selectionSerial+1
+        local serial=selectionSerial
+        if C_Timer and type(C_Timer.After)=='function' then
+            C_Timer.After(0,function()
+                if serial==selectionSerial and page.Refresh and page:IsShown() then page:Refresh() end
+            end)
+        else
+            page:Refresh()
+        end
     end
     goalInput:SetScript('OnTextChanged',function(self,userInput)
         if not userInput then return end
@@ -1447,7 +1810,7 @@ function UI:BuildTrainingPlanner(page)
         local pair=DraftKey(owner,prof)
         if prevPair~=pair then
             goalInput:SetText(UI.trainingTargetDrafts[pair] or tostring(goal and goal.target or
-                (p and min(999,(p.skill or 0)+25) or 150)))
+                (p and min(300,(p.skill or 0)+25) or 150)))
             UI.trainingGraphFocus=false;UI.trainingGraphStep=1
         end
         prevPair=pair
@@ -1573,11 +1936,17 @@ function UI:BuildTrainingPlanner(page)
             end
             queue:SetShown(not stale and plan.complete and plan.guideVerified and
                 not plan.requiresTraining and not plan.rankBreakpoint and not plan.lowConfidence)
+            local groups=plan.displayGroups or {}
+            local gi=plan.displayIndex and plan.displayIndex[segIndex] or segIndex
+            local group=groups[gi]
             if UI.trainingGraphFocus then
-                focusButton.label:SetText('Focused Step '..tostring(segIndex)..'/'..tostring(#plan.segments))
+                focusButton.label:SetText('Focused '..tostring(gi)..'/'..tostring(#groups))
             else focusButton.label:SetText('Focus Current Step') end
-            previous:SetEnabled(UI.trainingGraphFocus and segIndex>1)
-            next:SetEnabled(UI.trainingGraphFocus and segIndex<#plan.segments)
+            previous:SetEnabled(UI.trainingGraphFocus and gi>1)
+            next:SetEnabled(UI.trainingGraphFocus and gi<#groups)
+            local reviews=plan.routeAudit or {}
+            routeAuditButton:SetShown(#reviews>0)
+            if routeAuditButton.label then routeAuditButton.label:SetText('Route Review ('..tostring(#reviews)..')') end
             local warning=(plan.guideWarnings or 0)>0 and
                 ('  /  '..tostring(plan.guideWarnings)..' guide steps need verification') or ''
             normalStatus=UI.trainingMessage or (plan.complete and
@@ -1597,6 +1966,7 @@ function UI:BuildTrainingPlanner(page)
             if UI.trainingFocusedCraftAll then UI.trainingFocusedCraftAll:SetEnabled(false) end
             if UI.trainingFocusedCraftNotice then UI.trainingFocusedCraftNotice:SetText('') end
             queue:Hide()
+            routeAuditButton:Hide()
             normalStatus=UI.trainingMessage or 'Choose a profession with a curated guide.'
             if flashTime<=0 then achievement:SetText(normalStatus) end
         end
@@ -1610,8 +1980,20 @@ function UI:BuildTrainingPlanner(page)
         end
     end
     if viewport.HookScript then
+        local resizeSerial=0
         viewport:HookScript('OnSizeChanged',function()
-            if page.DrawGuide and page:IsShown() then page:DrawGuide(true) end
+            if not page:IsShown() then return end
+            resizeSerial=resizeSerial+1
+            local serial=resizeSerial
+            if C_Timer and type(C_Timer.After)=='function' then
+                C_Timer.After(.12,function()
+                    if serial==resizeSerial and page:IsShown() and page.DrawGuide then
+                        page:DrawGuide(true)
+                    end
+                end)
+            elseif page.DrawGuide then
+                page:DrawGuide(true)
+            end
         end)
     end
     -- No protected OpenTradeSkill in OnShow: it can be triggered by an

@@ -1,4 +1,4 @@
-# Azeroth Foundry — v1.0.30 (Workshop Training Guides)
+# Azeroth Foundry — v1.0.31 (Training Guides & Stability)
 
 *Your Adventurer's Journal*
 
@@ -8,17 +8,86 @@ Azeroth Foundry is a locally saved, account-wide adventurer's journal for **Worl
 
 1. Close World of Warcraft: Forever.
 2. Extract the `AzerothFoundry` folder into the Forever client's `Interface/AddOns/` directory. The manifest must be at `Interface/AddOns/AzerothFoundry/AzerothFoundry.toc` (not inside another folder).
-3. Start Forever and enable the addon from the AddOns menu. Type `/af` to open it; `/af guide` opens the optional Adventurer's Guide.
+3. Start Forever and enable the addon from the AddOns menu. Type `/af` to open it; `/af guide` opens the optional Adventurer's Guide, and `/af changelog` opens the latest release notes.
 4. When updating from an older test version, replace the *entire* `Interface/AddOns/AzerothFoundry` folder so deleted legacy texture files do not linger. **Do not delete your `WTF` folder** or SavedVariables.
 
 This release targets the Forever 1.60.1 interface (`16001`). If the client updates its interface version, the manifest may need to change; interface-number compatibility alone does not certify gameplay APIs.
 
+## v1.0.31 — Training Guide & Stability Release
+
+- Updated and modularized all eight curated profession guides to cover skill **1–300**.
+- Corrected selected Forever-specific route transitions; added guide review warnings and consolidated adjacent duplicate recipe nodes.
+- Improved Auctionator/vendor material comparisons and green recommendations for cheaper alternatives with no worse estimated skill-up odds.
+- Fixed Training profession switching errors and improved three-stage zoom performance.
+- Added a new **Changelog** button next to **? Guide** in the journal header, plus the `/af changelog` shortcut.
+- Kept the rest of Azeroth Foundry and saved character data intact. See `CHANGELOG.md` for full release notes and `CHANGELOG-v1.0.30.md` for historical notes.
+
+## v1.0.30.7 — Recommended Alternative Recipes (Test Build)
+
+- **Green, theme-aware recommendation cards** highlight learned alternatives only when
+  the saved material quotes show a lower estimated total cost **and** the alternative
+  covers every skill point in the milestone with equal or better estimated skill-up odds.
+- Recommendations are sorted first and shown in Overview as a better-value branch.
+  Focusing a step shows the estimated savings, with WoW's native checkmark icon.
+- Alternatives with cheaper materials but worse/unknown skill-up odds remain visible,
+  without the green recommendation. Missing reagent prices never produce a green pick.
+- Selection is **always manual**. Choosing a recommended alternative highlights
+  the selected recipe, and Restore Trainer Baseline remains available.
+- Price comparisons use recorded Auctionator quotes, actual merchant buy prices,
+  or labeled vendor-reference estimates. Quotes may be stale; the highlight is
+  not a guaranteed profit or exact gold-saving promise.
+- All eight curated routes, guide files, native crafting, scan and milestone UI
+  remain unchanged. No SavedVariables migration is needed.
+
+## v1.0.30.6 — Training Route Accuracy Pass (Test Build)
+
+- Corrected Forever skill-color transitions in **Tailoring**, including Woolen Cape,
+  Bolt of Mageweave, and the 280-300 finish. The late finish now uses Runecloth
+  Shoulders and Mooncloth Robe instead of near-gray Venomspew patterns. The latter
+  requires a Spinning Wheel and expensive Mooncloth; it is provisional until
+  recipe/pattern availability is verified in the live client.
+- **Leatherworking** now stops Wicked Leather Gauntlets before green at 265,
+  inserts an orange Runic Leather Headband bridge to 270, and retains the
+  supported Heavy Scorpid Helm finish through 300.
+- **Blacksmithing** stops Coarse Grinding Stone before green and switches to
+  guaranteed-orange Runed Copper Gauntlets for the remainder of that range.
+- Clarified that **First Aid 75-80** still uses a documented green fallback,
+  because Wool Bandage begins at 80 in the references reviewed.
+- All eight profession guides still cover 1-300; unchanged guides remain
+  provisional pending individual recipe-source and rank verification.
+- No UI, crafting, scanning, theme, animation, or SavedVariables changes.
+
+## v1.0.30.5 — Training Route Consolidation & Guide Sanity Warnings (Test Build)
+
+- **Cleaner Training overview:** consecutive milestone steps using the same recipe and acquisition state now appear as one visual node. For example, 270–300 Heavy Scorpid Helm can be a single card instead of three repeated ten-skill cards. The total estimated craft count is the sum of the original bands.
+- **Inspect / Focus:** merged nodes include a combined range and expected craft count, with an optional **Skill-Band Breakdown**. Select an individual band to use its original native Craft 1/Craft All controls and material requirements; no crafting quantities are silently combined or submitted.
+- **Guide QA:** a Route Review control flags long single-recipe stretches (20+ skill points) and recipes repeated after an intervening choice. It shows the underlying skill ranges for data review; these warnings do not alter the route automatically.
+- Kept the eight curated 1–300 profession datasets, Auctionator/vendor estimates, background scanning, three-state zoom, Theme Studio colors, milestone celebrations, queue safeguards, and SavedVariables schema unchanged.
+
+**Notes:** Visual consolidation does not prove a recipe's skill thresholds or acquisition source. The existing guide-data verification warnings remain in force.
+
+## v1.0.30.2 — Three-Stage Training Zoom (UI Test Build)
+
+- Restored **automatic entry into Focus** when scrolling above 120% in the Training Guide.
+- Balanced semantic navigation into three bands: **compact overview** (50–85%), **detailed overview** (85–120%), and **focused milestone** (upper zoom band).
+- Mouse wheel moves in **5% increments**, with smoothstep ease-in/ease-out interpolation instead of abrupt target snaps.
+- Added a short, theme-aware eased fade for compact/detail and detail/Focus handoffs; frame-heavy graph layouts rebuild only behind the fade or after zoom settles.
+- Mouse wheel continues to zoom **within** Focus; it does not unexpectedly eject the player to Overview. The Overview control exits Focus and returns to a readable detailed view.
+- Retained v1.0.30.1 profession-selection stability, protected scanning, milestone crafting, native cast progress, guide content, and all existing artwork.
+
+## v1.0.30.1 — Training Stability Hotfix
+- Fixed an undefined `EnsureTrainingScan` function call when selecting a different profession in Workshop → Training. Previously the click could throw a Lua error before refreshing the selected guide.
+- Profession changes now run the native scan from the original player click, handle API errors without aborting UI selection, and defer the heavier graph rebuild by one frame. Repeatedly selecting the already-active profession is a no-op; use Scan to refresh its data.
+- Reduced frame churn when wheel-zooming the training tree by animating the existing graph, only rebuilding the crisp scene at the destination zoom level.
+- Debounced graph redraws during window resizing and cleaned up theme handlers belonging to retired graph scenes.
+- Preserved v1.0.30's eight curated profession guides and existing crafting, milestone, and Theme Studio behavior.
+
 ## v1.0.30 — Training Guide Release
 
-- Training Guides now cover **Alchemy, Blacksmithing, Enchanting, Engineering, Leatherworking, Tailoring, Cooking, and First Aid** from skill **1–225**. The new guides build on the tested Leatherworking UI and use the same native profession scanning, inventory/material calculations, Auctionator estimates, Focus/Overview navigation, optional learned-recipe alternatives, crafting buttons, cast progress, and milestone celebrations.
+- Training Guides now cover **Alchemy, Blacksmithing, Enchanting, Engineering, Leatherworking, Tailoring, Cooking, and First Aid** from skill **1–300**. The new guides build on the tested Leatherworking UI and use the same native profession scanning, inventory/material calculations, Auctionator estimates, Focus/Overview navigation, optional learned-recipe alternatives, crafting buttons, cast progress, and milestone celebrations.
 - Training is for craft-levelable professions. Gathering professions are managed from the regular Professions page; no recipe-based Mining, Herbalism, Skinning or Fishing paths are invented.
 - Vendor formulas, skill books and manuals are labeled on their affected guide steps. The reference data is not a guarantee that a specific trainer offers each recipe. Unlearned or unverified steps are never automatically treated as ready to craft.
-- Guide rows are estimates that need additional live testing; 225–300 is not yet included. For detailed release notes see `CHANGELOG.md` and for research provenance see `TRAINING_GUIDE_REFERENCES.txt`.
+- Guide rows are estimates that need additional live testing; skill 225–300 is provisionally covered with explicitly labeled special/vendor/book steps. For detailed release notes see `CHANGELOG.md` and for research provenance see `TRAINING_GUIDE_REFERENCES.txt`.
 
 ## Training features introduced since v1.0.28
 
@@ -216,4 +285,40 @@ The target skill is edited within the graph header using **Set Goal**, and the c
 
 Skill-up progress animates when Foundry records a profession skill change. Reaching a curated milestone produces a brief visual highlight and optional sound (**Fanfare: ON/OFF**); the first page open never plays a sound. Milestones do not count crafting XP: orange guarantees one skill point, yellow gives a chance, and green/gray are excluded from this curated guide. Queue export still requires learned, verified recipes and never crafts without a player action.
 
-Only Leatherworking 1–225 has curated coverage so far. Unsupported professions display a coverage message instead of silently falling back to the former speculative Personal Route. The guide is reference data and should be verified in Forever before shopping.
+All eight recipe-based professions now have curated 1–300 guide coverage. Gathering professions remain excluded from this crafting planner. The guide is reference data and should be verified in Forever before shopping.
+
+
+### v1.0.30.3 — Modular profession-guide datasets
+
+Profession Training now loads shared calculations from `Training/TrainingGuide.lua`,
+shared material and crafting helpers from `Training/TrainingMaterials.lua`, and
+each profession's unchanged curated milestone references from
+`Training/Guides/<Profession>.lua`. The existing `UI/TrainingPlanner.lua`
+remains the shared UI. No SavedVariables migration is required.
+
+The eight files are **reference route data**, not proof that all Forever
+recipes or trainer unlocks have been verified. The guide's existing
+uncertainty markers and crafting safeguards remain in place.
+
+`AF:RegisterTrainingGuide(professionName, rows)` expects ordered contiguous
+`{skillFrom, skillTo, recipeName, estimatedCrafts, acquisition?, note?}`
+rows. Additional guides can be registered in their own file after loading
+`Training/TrainingGuide.lua` and before building the Training UI.
+
+### v1.0.30.4 — Extended 1–300 guides and vendor-aware prices
+
+All eight individual profession guides now extend to the skill cap of 300.
+Several inefficient or misclassified steps were updated after cross-checking
+Wowhead, Mobalytics, Method and Icy Veins (see `Training/GuideSources.md`).
+Enchanting rod milestones were moved to their recorded Forever learning skills;
+Engineering replaces the green Solid Blasting Powder stretch with Iron Grenades;
+Tailoring updates its wool, silk, Mageweave and Runecloth transitions.
+
+Material cost comparisons (including learned-recipe alternatives) now use
+saved Auctionator prices and actual vendor purchase quotes, choosing the
+cheaper source. Common trade supplies have labeled **vendor reference prices**
+where a live vendor quote has not yet been observed. Costs and recipe acquisition
+sources remain provisional when the current game data cannot confirm them.
+
+The existing focus/zoom UI, native crafting, profession scanning, and fanfare
+systems were not changed in this release.

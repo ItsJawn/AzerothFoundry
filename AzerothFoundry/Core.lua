@@ -1,7 +1,7 @@
 -- Azeroth Foundry: bootstrap and account-wide data (WoW: Forever / Interface 16001)
 local ADDON_NAME, AF = ...
 AF.name = ADDON_NAME
-AF.version = "1.0.29.10"
+AF.version = "1.0.31"
 AF.events = CreateFrame("Frame")
 
 local function Print(message)
@@ -414,7 +414,14 @@ SLASH_AZEROTHFOUNDRY1 = "/af"
 SLASH_AZEROTHFOUNDRY2 = "/foundry"
 SlashCmdList.AZEROTHFOUNDRY = function(arg)
     local command = tostring(arg or ""):lower():match("^%s*(.-)%s*$")
-    if command == "guide" or command == "tutorial" or command == "tour" then
+    if command == "changelog" or command == "changes" then
+        if AF.UI and AF.UI.OpenChangelog then
+            AF.UI:OpenChangelog()
+        else
+            Print("Changelog is unavailable until the journal finishes loading.")
+        end
+        return
+    elseif command == "guide" or command == "tutorial" or command == "tour" then
         if AF.UI and AF.UI.OpenAdventurersGuide then
             AF.UI:OpenAdventurersGuide()
         else

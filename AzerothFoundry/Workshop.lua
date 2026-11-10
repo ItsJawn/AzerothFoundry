@@ -100,8 +100,8 @@ function AF:SetWorkshopGoal(key, profession, target)
     local prof = c and c.professions and c.professions[profession]
     target = tonumber(target)
     if not prof then return false, "Profession not recorded on that character" end
-    if not target or target < 1 or target > 999 or target ~= math.floor(target) then
-        return false, "Enter a whole-number skill target between 1 and 999"
+    if not target or target < 1 or target > 300 or target ~= math.floor(target) then
+        return false, "Enter a whole-number skill target between 1 and 300"
     end
     local list = self.db.workshopGoals[key]
     if not list then list = {}; self.db.workshopGoals[key] = list end

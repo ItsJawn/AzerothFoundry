@@ -342,6 +342,12 @@ function UI:Initialize()
     guideButton:SetPoint("TOPRIGHT",header,"TOPRIGHT",-302,-22)
     guideButton:SetSize(90,28)
     self.guideButton=guideButton
+    local changelogButton=self:Button(header,'Changelog',function()
+        if UI.OpenChangelog then UI:OpenChangelog() end
+    end)
+    changelogButton:SetSize(108,28)
+    changelogButton:SetPoint('RIGHT',guideButton,'LEFT',-8,0)
+    self.changelogButton=changelogButton
 
     local nav = CreateFrame("Frame",nil,frame)
     nav:SetPoint("TOPLEFT", 12, -84)
