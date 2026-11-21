@@ -1,4 +1,4 @@
-# Azeroth Foundry — v1.0.31 (Training Guides & Stability)
+# Azeroth Foundry — v1.0.32 (Secondary Profession Guide Corrections)
 
 *Your Adventurer's Journal*
 
@@ -12,6 +12,14 @@ Azeroth Foundry is a locally saved, account-wide adventurer's journal for **Worl
 4. When updating from an older test version, replace the *entire* `Interface/AddOns/AzerothFoundry` folder so deleted legacy texture files do not linger. **Do not delete your `WTF` folder** or SavedVariables.
 
 This release targets the Forever 1.60.1 interface (`16001`). If the client updates its interface version, the manifest may need to change; interface-number compatibility alone does not certify gameplay APIs.
+
+## v1.0.32 — Cooking & First Aid Guide Corrections
+
+- Updated the **Cooking 1–300** reference route: starts with Roasted Boar Meat, clarifies vendor-bought fish recipes and rank unlocks, switches to Curiously Tasty Omelet at 150–175, and finishes with Spotted Yellowtail / Nightfin Soup at a standard Cooking Fire instead of the Iron Oven-dependent Mightfish Steak.
+- Updated **First Aid 1–300**: distinguishes trainer recipes from purchased manuals, adds Expert First Aid at 125, labels the Artisan Triage stop at 225 and faction doctors, and adjusts bandage estimates.
+- Updated the **in-game Changelog** and version metadata for this public release.
+- Fishing is catch-based and is not presented as a recipe-crafting leveling route.
+- Preserve your existing SavedVariables. Crafting systems, other six profession guides, and existing user data are unchanged.
 
 ## v1.0.31 — Training Guide & Stability Release
 

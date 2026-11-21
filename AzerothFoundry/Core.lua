@@ -1,7 +1,7 @@
 -- Azeroth Foundry: bootstrap and account-wide data (WoW: Forever / Interface 16001)
 local ADDON_NAME, AF = ...
 AF.name = ADDON_NAME
-AF.version = "1.0.31"
+AF.version = "1.0.32"
 AF.events = CreateFrame("Frame")
 
 local function Print(message)

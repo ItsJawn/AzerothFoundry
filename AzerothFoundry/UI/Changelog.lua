@@ -6,9 +6,24 @@ local unpack = unpack or table.unpack
 local max, min = math.max, math.min
 
 local RELEASE = {
-    version = '1.0.31',
-    subtitle = 'Training Guides, Smart Alternatives & Stability',
+    version = '1.0.32',
+    subtitle = 'Secondary Profession Guide Updates',
     sections = {
+        {
+            title = 'New in v1.0.32 - Secondary Profession Guides',
+            icon = 'Interface\\Icons\\INV_Misc_Food_15',
+            bullets = {
+                'Cooking 1-50 now starts with the basic Roasted Boar Meat recipe; Brilliant Smallfish is correctly identified as a vendor recipe, not a trainer unlock.',
+                'Cooking ranks, purchased recipe vendors and faction-specific sources are now explained at the relevant skill milestones.',
+                'Cooking 150-175 now prefers Curiously Tasty Omelet instead of green Bristle Whisker Catfish, with Horde/Alliance vendor acquisition guidance.',
+                'Cooking 225-285 uses Spotted Yellowtail and 285-300 uses Nightfin Soup at an ordinary Cooking Fire. Removed the Iron Oven-dependent Mightfish Steak finish.',
+                'First Aid now distinguishes the Expert rank book at 125, trainer-taught Silk Bandage, purchased manuals, and the Artisan Triage quest at 225.',
+                'First Aid clearly marks the 225 Artisan gate, faction doctors, later bandage unlocks and the required 75-80 green fallback.',
+                'Fishing remains a catch-based secondary profession and is intentionally not represented as a crafting queue route.',
+                'Updated reference craft estimates. Recipe purchases, rank training and quest requirements are not included in material totals.',
+                'No SavedVariables reset is required. Other profession guides, crafting behavior and saved data are unchanged.',
+            },
+        },
         {
             title = 'Training Routes 1 - 300',
             icon = 'Interface\\Icons\\Trade_LeatherWorking',
